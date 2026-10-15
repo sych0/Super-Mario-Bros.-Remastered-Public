@@ -4,6 +4,11 @@ Status: proposal, written against `881e42b`. Milestone 1 (section 10) is impleme
 `37-battle-preview-milestone-1.md` for what was built, what changed from this proposal, and the
 measurements. Everything after milestone 1 is still a proposal.
 
+> **Partly superseded by `38-battle-screen-architecture.md`.** The screen composition this doc
+> assumed (a 426×240 root viewport with 26×33-pixel cells, see §1, §4.6, R1, R7) was wrong.
+> Previews are now drawn full size into an atlas and scaled down into display-resolution panes.
+> The session, sketch, assets, track and driver design below still holds.
+
 Goal: each of the 34 opponent windows should look like a tiny live Mario run, like
 Super Mario Bros. 35. It should do that without hidden game copies, without `Player` nodes
 and without level scene trees. `BattleSession` stays the only simulation.

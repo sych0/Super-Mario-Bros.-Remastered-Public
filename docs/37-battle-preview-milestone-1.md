@@ -1,5 +1,9 @@
 # 37 — Battle Mode: opponent preview, milestone 1 (World 1-1, opponent #1)
 
+> **Rendering superseded by `38-battle-screen-architecture.md`.** §5 (1.6× zoom, 1.35× actors)
+> and §6 (pixel-perfect vs smooth) worked around 26×33-pixel cells that should not exist. The
+> track, driver, sketch and assets described here are unchanged.
+
 Implements milestone 1 of `36-battle-preview-architecture.md`: **one** opponent window
 (opponent #1, World 1-1) looks like a small live Mario run. The other 33 windows, and any
 level other than 1-1, still use `BattlePlaceholderRenderer`. This is a visual prototype of the
