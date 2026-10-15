@@ -171,9 +171,10 @@ func play_sfx(stream_name = "", position := Vector2.ZERO, pitch := 1.0, can_over
 		player.queue_free()
 
 func play_global_sfx(stream_name = "", pitch := 1.0) -> void:
-	if get_viewport().get_camera_2d() == null:
+	var camera: Camera2D = Global.get_game_viewport().get_camera_2d()
+	if camera == null:
 		return
-	play_sfx(stream_name, get_viewport().get_camera_2d().get_screen_center_position(), pitch)
+	play_sfx(stream_name, camera.get_screen_center_position(), pitch)
 
 func _process(_delta: float) -> void:
 	handle_music()

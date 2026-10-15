@@ -455,10 +455,11 @@ func test_fallback_and_hud() -> void:
 
 func test_hud_integration() -> void:
 	var G = root.get_node("Global")
-	var Hud = load("res://Scripts/Classes/Battle/BattleHud.gd")
+	var Screen = load("res://Scripts/Classes/Battle/BattleScreen.gd")
 	G.current_game_mode = G.GameMode.BATTLE
 	var s = S.begin(19)
-	var hud = Hud.ensure(self)
+	var hud = Screen.new() # the Battle screen without a level: the previews only need the session
+	root.add_child(hud)
 	await frames(4)
 	check(hud.driver != null and hud.driver.tracks.size() == 1, "the HUD runs one preview track by default")
 	var live = hud.surfaces.filter(func(x): return x.is_live())
@@ -472,7 +473,8 @@ func test_hud_integration() -> void:
 	await frames(2)
 	check(hud.surfaces[0].ko and hud._alive_label.text.contains("34"), "a KO shows in the HUD state at once while the picture is still running")
 	check(hud.surfaces[0].is_live() and not hud.surfaces[0].frame.ko_overlay, "...and the picture's own KO marking waits for the death animation")
-	hud.queue_free()
+	root.remove_child(hud)
+	hud.free()
 	S.clear()
 	await frames(3)
 	# debug stress mode: every window live
@@ -481,11 +483,13 @@ func test_hud_integration() -> void:
 	D._flag_cache.clear()
 	if OS.is_debug_build():
 		var s2 = S.begin(4)
-		var hud2 = Hud.ensure(self)
+		var hud2 = Screen.new()
+		root.add_child(hud2)
 		await frames(4)
 		check(hud2.driver != null and hud2.driver.tracks.size() == 34, "debug_all puts all 34 windows on the live renderer")
 		check(hud2.debug_surface != null and hud2.debug_surface.size == Vector2(256, 240), "debug view draws opponent #1 at 256x240")
-		hud2.queue_free()
+		root.remove_child(hud2)
+		hud2.free()
 		S.clear()
 		await frames(3)
 	OS.set_environment("SMB1R_BATTLE_PREVIEW_ALL", "")

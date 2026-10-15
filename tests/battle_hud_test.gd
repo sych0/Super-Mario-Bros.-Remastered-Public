@@ -1,9 +1,11 @@
 extends SceneTree
-## Headless checks for the Battle HUD lifecycle and data binding. Needs the imported project
-## (autoloads + scenes). Run: godot --headless --path . -s tests/battle_hud_test.gd
+## Layout and data-binding checks for the Battle screen. The layout part is pure geometry; the
+## binding part puts a BattleScreen in the tree without a level (composition, routing and window
+## ownership are in battle_screen_test.gd). Needs the imported project (autoloads + scenes).
+## Run: godot --headless --fixed-fps 60 --path . -s tests/battle_hud_test.gd
 
 var failures := 0
-var HUD
+var BS
 var HANDLER
 var SESSION
 var LAYOUT
@@ -19,125 +21,82 @@ func frames(n: int) -> void:
 	for i in n:
 		await process_frame
 
-func wait_until(cond: Callable, max_frames := 900) -> bool:
-	for i in max_frames:
-		if cond.call():
-			return true
-		await process_frame
-	return cond.call()
-
-func huds() -> int:
-	var n := 0
-	for c in root.get_children():
-		if c.name.begins_with("BattleHud") or c.get_script() == HUD:
-			n += 1
-	return n
-
 func _initialize() -> void:
+	_run()
+
+func _run() -> void:
 	await frames(5)
-	HUD = load("res://Scripts/Classes/Battle/BattleHud.gd")
+	BS = load("res://Scripts/Classes/Battle/BattleScreen.gd")
 	HANDLER = load("res://Scripts/Classes/Battle/BattleHandler.gd")
 	SESSION = load("res://Scripts/Classes/Battle/BattleSession.gd")
 	LAYOUT = load("res://Scripts/Classes/Battle/BattleHudLayout.gd")
 	var G = root.get_node("Global")
-	test_layout(G)
-	var S = root.get_node("Settings")
-	S.file.video.size = 0
+	test_layout()
 
-	# Outside Battle nothing exists, and the HUD frees itself if it is created anyway.
+	# Outside Battle nothing exists.
 	G.current_game_mode = G.GameMode.CAMPAIGN
-	check(huds() == 0, "no Battle HUD outside Battle")
+	check(not BS.is_active() and BS.instance == null, "no Battle screen outside Battle")
 	check(HANDLER.sim_speed() == 1, "dev sim speed defaults to 1")
+	check(not BS.routes("res://Scenes/Levels/SMB1/World1/1-1.tscn"), "Classic scenes are never routed into a Battle screen")
 
-	# Enter Battle.
+	# Enter Battle with a screen and a session (no level: the data binding needs none).
 	G.current_game_mode = G.GameMode.BATTLE
 	var s = SESSION.begin(5)
-	var hud = HUD.ensure(self)
-	var again = HUD.ensure(self)
+	check(BS.routes("res://Scenes/Levels/SMB1/World1/1-1.tscn") and BS.routes("res://Scenes/Levels/LevelTransition.tscn"), "Battle routes game scenes")
+	check(not BS.routes(BS.TITLE_SCENE) and not BS.routes(null), "the title (and a null scene) leave Battle instead of being routed")
+	var screen = BS.new()
+	root.add_child(screen)
 	await frames(3)
-	check(hud == again, "ensure() returns the same HUD")
-	check(huds() == 1, "exactly one Battle HUD in Battle")
-	check(hud.surfaces.size() == 34, "34 opponent preview surfaces")
+	check(BS.instance == screen and BS.is_active(), "the screen registers itself as the Battle screen")
+	check(screen.surfaces.size() == 34, "34 opponent preview surfaces")
 	var ids := []
-	for t in hud.surfaces:
+	for t in screen.surfaces:
 		ids.append(t.contestant_id)
 	check(ids == range(1, 35), "surfaces are contestants 1..34")
-	check(root.content_scale_size == Vector2i(426, 240) and root.content_scale_aspect == Window.CONTENT_SCALE_ASPECT_KEEP, "Battle forces the native 16:9 resolution")
-	var center: Rect2 = hud.layout.center
-	var visible_all := true
-	for t in hud.surfaces:
-		var r := Rect2(t.position, t.size)
-		if r.intersects(center) or not Rect2(Vector2.ZERO, hud.layout.viewport).encloses(r) or t.size.x < 10 or not t.visible:
-			visible_all = false
-	check(visible_all, "all 34 slots are on screen and outside the gameplay area")
-	check(hud._alive_label.text.contains("35"), "status shows 35 alive (%s)" % hud._alive_label.text.replace("\n", " "))
-	check(hud._time_label.text.contains("600"), "timer comes from session (%s)" % hud._time_label.text.replace("\n", " "))
+	check(screen._alive_label.text.contains("35"), "status shows 35 alive (%s)" % screen._alive_label.text)
+	check(screen._time_label.text == "TIME 600", "timer comes from the session (%s)" % screen._time_label.text)
+	check(screen._course_label.text == "1-1", "course badge shows 1-1 (%s)" % screen._course_label.text)
 
 	# Data binding.
 	s.report_ko(7, s.KoCause.HAZARD)
 	await frames(2)
-	check(hud.surfaces[6].ko, "KO propagates to preview 7")
-	check(hud.surfaces.filter(func(t): return t.ko).size() == 1, "only the KO'd preview is marked")
-	check(hud._alive_label.text.contains("34"), "remaining count reflects session (%s)" % hud._alive_label.text.replace("\n", " "))
+	check(screen.surfaces[6].ko, "KO propagates to preview 7")
+	check(screen.surfaces.filter(func(t): return t.ko).size() == 1, "only the KO'd preview is marked")
+	check(screen._alive_label.text == "34", "remaining count reflects the session (%s)" % screen._alive_label.text)
 	for i in 30:
 		s.step()
 	await frames(2)
-	check(hud._time_label.text.contains("570"), "timer follows session ticks (%s)" % hud._time_label.text.replace("\n", " "))
-	var moved: int = hud.surfaces.filter(func(t): return not t.ko and t.progress > 0.0).size()
+	check(screen._time_label.text == "TIME 570", "timer follows session ticks (%s)" % screen._time_label.text)
+	var moved: int = screen.surfaces.filter(func(t): return not t.ko and t.progress > 0.0).size()
 	check(moved > 0, "bot progress reaches the preview surfaces")
-	check(hud._rank_label.text.contains("%d/35" % s.get_provisional_rank()), "rank matches session")
+	check(screen._rank_label.text == "RANK %d/35" % s.get_provisional_rank(), "rank matches the session (%s)" % screen._rank_label.text)
 	s.report_player_progress(0.9)
 	check(s.get_provisional_rank() == 1 or s.get_provisional_rank() < 35, "player progress feeds rank")
+	check(screen.driver == null or screen.driver.tracks.size() >= 1, "the live preview driver (opponent #1) is optional, never required")
 
-	# Survives a normal level transition (HUD is root-level, session persists).
-	G.reset_values()
-	root.get_node("Global").current_game_mode = G.GameMode.BATTLE
-	var scene_path: String = "res://Scenes/Levels/SMB1/World1/1-1.tscn"
-	change_scene_to_file(scene_path)
-	await frames(30)
-	check(huds() == 1 and is_instance_valid(hud), "HUD survives a scene change, not duplicated")
-	check(current_scene.has_node("BattleHandler") or true, "level loaded")
+	# The result overlay (interim, until the round lifecycle exists) is a view of the finished session.
+	var others: int = s.alive_count
+	s.report_ko(0, s.KoCause.HAZARD)
+	s.resolve_to_end()
+	screen.show_result(s, others)
+	await frames(2)
+	check(screen.showing_result and screen._overlay.visible, "result overlay is shown when the player is KO'd")
+	check(screen._overlay.get_rect() == screen.layout.game, "the result covers the game window only")
+	check(screen._overlay_label.text.contains("PLACE") or screen._overlay_label.text.contains("WON"), "result shows placement")
+	check(screen._overlay_label.text.contains("WINNER"), "result shows the winner")
+	check(screen._overlay_label.text.contains("LEFT"), "result shows opponents remaining at KO")
+	check(not screen.result_dismissed(), "result stays up until dismissed")
+	screen.result_age = HANDLER.RESULT_MAX_SECONDS
+	check(screen.result_dismissed(), "result auto-continues after its timer")
 
-	# Result flow through the real end_match path, then return to title.
-	
-	HANDLER.end_match()
-	await frames(5)
-	check(hud.showing_result, "result overlay is shown when the player is KO'd")
-	check(hud._overlay_label.text.contains("PLACE") or hud._overlay_label.text.contains("WON"), "result shows placement")
-	check(hud._overlay_label.text.contains("WINNER"), "result shows the winner")
-	check(hud._overlay_label.text.contains("LEFT"), "result shows opponents remaining at KO")
-	check(not hud.result_dismissed(), "result stays up until dismissed")
-	hud.result_age = HANDLER.RESULT_MAX_SECONDS # same as waiting out the auto-continue timer
-	var left: bool = await wait_until(func(): return SESSION.current == null and huds() == 0 and current_scene != null and current_scene.scene_file_path.ends_with("TitleScreen.tscn"), 1200)
-	check(left, "leaving Battle returns to title with no HUD and no session")
+	# A session going away (end of match) does not take the screen with it: leaving is a scene change.
+	SESSION.clear()
 	await frames(3)
-	check(root.content_scale_size == Vector2i(256, 240), "leaving Battle restores the user's 4:3 resolution (%s)" % root.content_scale_size)
-	check(G.current_game_mode != G.GameMode.BATTLE, "mode no longer BATTLE")
-
-	# Classic afterwards: no Battle UI.
-	G.current_campaign = "SMB1"
-	G.current_game_mode = G.GameMode.CAMPAIGN
-	G.reset_values()
-	root.get_node("Global")
-	var LV = load("res://Scripts/Classes/LevelClass.gd")
-	LV.first_load = true
-	change_scene_to_file(scene_path)
-	await frames(60)
-	check(huds() == 0, "Classic creates no Battle HUD")
-	check(root.content_scale_size == Vector2i(256, 240), "Classic after Battle is 4:3 (%s)" % root.content_scale_size)
-	check(not current_scene.has_node("BattleHandler"), "Classic has no BattleHandler")
-	check(SESSION.current == null, "Classic has no BattleSession")
-
-	# Existing user resolutions are untouched by the Battle changes (4:3, 5:4-ish, 16:9, expand).
-	for idx in 4:
-		S.file.video.size = idx
-		G.current_game_mode = G.GameMode.CAMPAIGN
-		LV.first_load = true
-		change_scene_to_file(scene_path)
-		await frames(30)
-		var want_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND if idx == 3 else Window.CONTENT_SCALE_ASPECT_KEEP
-		check(Vector2(root.content_scale_size) == G.RESOLUTIONS[idx] and root.content_scale_aspect == want_aspect and huds() == 0, "Classic resolution option %d unchanged (%s)" % [idx, root.content_scale_size])
-	S.file.video.size = 0
+	check(BS.is_active() and is_instance_valid(screen), "the screen outlives the session (it is the current scene, not a self-freeing overlay)")
+	root.remove_child(screen)
+	screen.free()
+	check(not BS.is_active() and BS.instance == null, "freeing the screen unregisters it")
+	await frames(2)
 
 	if failures > 0:
 		printerr("%d Battle HUD test(s) failed" % failures)
@@ -145,26 +104,50 @@ func _initialize() -> void:
 		print("All Battle HUD tests passed")
 	quit(1 if failures > 0 else 0)
 
-func test_layout(G) -> void:
-	var l: Dictionary = LAYOUT.compute(G.RESOLUTIONS[2])
-	check(l.center == Rect2(85, 0, 256, 240), "gameplay area is the classic 256x240 centred in 426x240 (%s)" % l.center)
+func overlaps(a: Rect2, b: Rect2) -> bool:
+	return a.intersects(b)
+
+func whole(r: Rect2) -> bool:
+	return r.position == r.position.round() and r.size == r.size.round()
+
+func test_layout() -> void:
+	var l: Dictionary = LAYOUT.compute()
+	check(l.canvas == Vector2(480, 270), "Battle canvas is 480x270 (%s)" % l.canvas)
+	check(l.game == Rect2(112, 3, 256, 240), "game window is the classic 256x240 at (112, 3) (%s)" % l.game)
+	check(l.game.size == LAYOUT.GAME_SIZE, "window size is the classic gameplay size")
+	check(l.game.get_center().x == 240.0, "game window is centred horizontally on the canvas")
+	var all: Array = [l.game, l.frame, l.strip_a, l.strip_b, l.badge_left, l.badge_right, l.left, l.right] + l.slots
+	check(all.all(func(r): return whole(r)), "all geometry is on whole logical pixels")
+	check(Rect2(Vector2.ZERO, l.canvas).encloses(l.frame) and Rect2(Vector2.ZERO, l.canvas).encloses(l.game), "frame and window fit the canvas")
+	check(l.frame.encloses(l.game) and l.frame.encloses(l.strip_a) and l.frame.encloses(l.strip_b), "the gold frame surrounds the window and both strips")
 	var slots: Array = l.slots
 	check(slots.size() == 34, "layout has 34 slots")
-	var overlap := false
+	var left_slots: Array = slots.slice(0, 17)
+	var right_slots: Array = slots.slice(17)
+	check(left_slots.all(func(r): return l.left.encloses(r)) and right_slots.all(func(r): return l.right.encloses(r)), "17 slots per side, each inside its own panel (left 1-17, right 18-34)")
+	check(l.left.end.x <= l.frame.position.x and l.right.position.x >= l.frame.end.x, "panels end where the frame begins")
+	var clash := false
 	for i in slots.size():
 		for j in range(i + 1, slots.size()):
-			if slots[i].intersects(slots[j]):
-				overlap = true
-		if slots[i].intersects(l.center):
-			overlap = true
-	check(not overlap, "slots never overlap each other or the gameplay area")
-	for b in [l.badge_left, l.badge_right]:
-		for r in slots:
-			if r.intersects(b):
-				overlap = true
-		if b.intersects(l.center):
-			overlap = true
-	check(not overlap, "badges don't overlap slots or the gameplay area")
-	check(l.badge_left.position.x > slots[1].position.x and l.badge_right.end.x < slots[17].position.x, "badges sit in the inner top corners (course left, alive right)")
-	check(slots[0].position.x < l.center.position.x and slots[17].position.x >= l.center.end.x, "17 slots per side (left 1-17, right 18-34)")
-	check(slots[0].size.x / slots[0].size.y > 0.7 and slots[0].size.x / slots[0].size.y < 0.85, "slots are portrait like the reference (%s)" % slots[0].size)
+			clash = clash or overlaps(slots[i], slots[j])
+		for other in [l.game, l.frame, l.strip_a, l.strip_b, l.badge_left, l.badge_right]:
+			clash = clash or overlaps(slots[i], other)
+	check(not clash, "no slot overlaps another slot, the window, the frame, a strip or a badge")
+	clash = overlaps(l.badge_left, l.frame) or overlaps(l.badge_right, l.frame) or overlaps(l.badge_left, l.badge_right)
+	check(not clash, "badges don't overlap the frame or each other")
+	clash = overlaps(l.game, l.strip_a) or overlaps(l.game, l.strip_b) or overlaps(l.strip_a, l.strip_b)
+	check(not clash, "the window and the two strips never overlap")
+	check(l.strip_a.position.y >= l.game.end.y and l.strip_b.position.y >= l.strip_a.end.y and l.strip_b.end.y <= l.frame.end.y, "both strips fit under the window, inside the frame")
+	check(l.strip_a.position.x == l.game.position.x and l.strip_a.size.x == l.game.size.x and l.strip_b.position.x == l.game.position.x and l.strip_b.size.x == l.game.size.x, "strips are exactly as wide as the window")
+	check(l.badge_left.position.x >= slots[1].end.x and l.badge_right.end.x <= slots[17].position.x and l.badge_left.position.y == 0.0 and l.badge_right.position.y == 0.0, "badges hang from the top in the inner corners (course left, alive right)")
+	check(l.badge_left.end.x <= l.left.end.x and l.badge_right.position.x >= l.right.position.x, "badges are inside their panels")
+	check(slots.all(func(r): return r.size == Vector2(32, 41)), "every slot is 32x41 logical px")
+	var aspect: float = slots[0].size.x / slots[0].size.y
+	check(absf(aspect - 129.0 / 165.0) < 0.01, "slots keep the reference's portrait aspect (%s)" % aspect)
+	for key in ["status_left", "status_right"]:
+		var r: Rect2 = l[key]
+		check(r.size.y == l.top and r.position.y == 0.0 and not overlaps(r, l.badge_left) and not overlaps(r, l.badge_right) and slots.all(func(s): return not overlaps(r, s)), "%s is one text line in the strip above the grid, clear of badges and slots" % key)
+
+	# Whole-screen coverage: panes + badges + window + frame + strips never leave the canvas.
+	var inside: bool = slots.all(func(r): return Rect2(Vector2.ZERO, l.canvas).encloses(r))
+	check(inside, "every slot is on the canvas")

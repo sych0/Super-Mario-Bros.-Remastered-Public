@@ -1,8 +1,8 @@
 class_name BattleHandler
 extends Node
-## The only Battle piece that touches the scene tree. Added to each level by Level._enter_tree
-## while a BattleSession is active. Drives the session's fixed clock and forwards the real
-## player's events to it.
+## The Battle piece that touches the game's scene tree. Added to each level by Level._enter_tree
+## while a BattleSession is active (the level runs inside BattleScreen's GameViewport). Drives
+## the session's fixed clock and forwards the real player's events to it.
 
 const TITLE_SCENE := "res://Scenes/Levels/TitleScreen.tscn"
 const STEP_SECONDS := 1.0
@@ -59,7 +59,6 @@ func _ready() -> void:
 	if fresh_level:
 		session.report_level_start(Global.world_num, Global.level_num)
 	Global.level_complete_begin.connect(_on_level_complete)
-	BattleHud.ensure(get_tree())
 
 func _on_level_complete() -> void:
 	if level_completed or BattleSession.current == null:
@@ -110,6 +109,21 @@ func _report_progress(session: BattleSession) -> void:
 func owner_level_nodes() -> Array[Node]:
 	return get_parent().find_children("*", "Node2D", true, false)
 
+## Starts a Battle from the title: the same reset a new Classic run does, a fresh session, then a
+## transition into 1-1 that BattleScreen routes into its own GameViewport.
+static func start_match() -> void:
+	Global.current_game_mode = Global.GameMode.BATTLE
+	Global.current_campaign = "SMB1"
+	Global.second_quest = false
+	Global.clear_saved_values()
+	Global.world_num = 1
+	Global.level_num = 1
+	Global.reset_values()
+	BattleSession.begin(randi())
+	PipeCutscene.seen_cutscene = false
+	LevelTransition.level_to_transition_to = Level.get_scene_string(1, 1)
+	Global.transition_to_scene("res://Scenes/Levels/LevelTransition.tscn")
+
 ## Finishes the match from the real player's side, logs the ranking, clears the session and
 ## returns to the title screen. Safe to call more than once.
 static func end_match(cause := BattleSession.KoCause.HAZARD) -> void:
@@ -124,14 +138,11 @@ static func end_match(cause := BattleSession.KoCause.HAZARD) -> void:
 	AudioManager.stop_all_music()
 	Global.death_load = false
 	var tree := Engine.get_main_loop() as SceneTree
-	var hud := BattleHud.ensure(tree)
-	if not hud.is_inside_tree():
-		await hud.ready
-	hud.show_result(session, others_alive)
-	while is_instance_valid(hud) and not hud.result_dismissed():
-		await tree.process_frame
-	if is_instance_valid(hud):
-		hud.queue_free()
+	var screen := BattleScreen.instance if BattleScreen.is_active() else null
+	if screen != null:
+		screen.show_result(session, others_alive)
+		while is_instance_valid(screen) and screen.is_inside_tree() and not screen.result_dismissed():
+			await tree.process_frame
 	BattleSession.clear()
 	ending_session = null
 	Global.transition_to_scene(TITLE_SCENE)

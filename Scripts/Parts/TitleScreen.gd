@@ -234,17 +234,7 @@ func challenge_hunt_start() -> void:
 	Global.transition_to_scene("res://Scenes/Levels/LevelTransition.tscn")
 
 func start_battle() -> void:
-	Global.current_game_mode = Global.GameMode.BATTLE
-	Global.current_campaign = "SMB1"
-	Global.second_quest = false
-	Global.clear_saved_values()
-	Global.world_num = 1
-	Global.level_num = 1
-	Global.reset_values()
-	BattleSession.begin(randi())
-	PipeCutscene.seen_cutscene = false
-	LevelTransition.level_to_transition_to = Level.get_scene_string(1, 1)
-	Global.transition_to_scene("res://Scenes/Levels/LevelTransition.tscn")
+	BattleHandler.start_match()
 
 func world_9_selected() -> void:
 	Global.second_quest = false

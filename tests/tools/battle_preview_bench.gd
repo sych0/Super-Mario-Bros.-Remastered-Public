@@ -29,13 +29,14 @@ func _run() -> void:
 		packs.insert(0, added_pack)
 	var G = root.get_node("Global")
 	var Session = load("res://Scripts/Classes/Battle/BattleSession.gd")
-	var Hud = load("res://Scripts/Classes/Battle/BattleHud.gd")
+	var Hud = load("res://Scripts/Classes/Battle/BattleScreen.gd")
 	var Handler = load("res://Scripts/Classes/Battle/BattleHandler.gd")
 	G.current_game_mode = G.GameMode.BATTLE
 	var session = Session.begin(seed_value)
 	Engine.max_fps = 0
 	Hud.live_previews = args.get("live", "1") != "0" # live=0: every window stays on the placeholder (baseline)
-	var hud = Hud.ensure(self)
+	var hud = Hud.new() # the Battle screen without a level: only the previews are measured
+	root.add_child(hud)
 	await frames(3)
 	var live := 0
 	for s in hud.surfaces:

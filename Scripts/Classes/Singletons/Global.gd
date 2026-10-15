@@ -113,7 +113,7 @@ var coins := 0:
 		if coins >= 100:#
 			if Settings.file.difficulty.inf_lives == 0 and (current_game_mode != GameMode.CHALLENGE and current_campaign != "SMBANN"):
 				lives += floor(coins / 100.0)
-				AudioManager.play_sfx("1_up", get_viewport().get_camera_2d().get_screen_center_position())
+				AudioManager.play_sfx("1_up", get_game_viewport().get_camera_2d().get_screen_center_position())
 			coins = coins % 100
 var time := 300
 var inf_time := false
@@ -355,6 +355,12 @@ func get_memory_usage() -> String:
 		
 	return string + " - MEM USED"
 
+## The viewport the classic game runs in: the root normally, the Battle screen's 256x240
+## GameViewport during Battle (where the root is the whole Battle canvas and has no camera).
+func get_game_viewport() -> Viewport:
+	var battle_viewport := BattleScreen.get_game_viewport()
+	return battle_viewport if battle_viewport != null else get_viewport()
+
 func take_screenshot() -> void:
 	var img: Image = get_viewport().get_texture().get_image()
 	var filename = config_path.path_join("screenshots/screenshot_" + str(int(Time.get_unix_time_from_system())) + ".png")
@@ -501,6 +507,8 @@ func transition_to_scene(scene_path = "") -> void:
 		return
 	var time_stamp_1 = Time.get_ticks_msec()
 	transitioning_scene = true
+	if BattleScreen.is_active() and not BattleScreen.routes(scene_path):
+		BattleScreen.release_transition() # leaving Battle: this fade covers the whole screen
 	if fade_transition:
 		freeze_screen()
 		$Transition/AnimationPlayer.play("FadeIn")
@@ -512,11 +520,15 @@ func transition_to_scene(scene_path = "") -> void:
 		await get_tree().create_timer(0.1, true).timeout
 	if scene_path == null:
 		scene_path = "res://Scenes/Levels/CustomLevelBase.tscn"
-	if scene_path is String:
-		get_tree().change_scene_to_file(scene_path)
-	elif scene_path is PackedScene:
-		get_tree().change_scene_to_packed(scene_path)
-	await get_tree().scene_changed
+	if BattleScreen.routes(scene_path):
+		# Battle keeps one BattleScreen alive and swaps the game scene inside its GameViewport.
+		await BattleScreen.load_game_scene(scene_path)
+	else:
+		if scene_path is String:
+			get_tree().change_scene_to_file(scene_path)
+		elif scene_path is PackedScene:
+			get_tree().change_scene_to_packed(scene_path)
+		await get_tree().scene_changed
 	await get_tree().create_timer(0.15, true).timeout
 	if fade_transition:
 		close_freeze()
@@ -550,7 +562,9 @@ func freeze_screen() -> void:
 		return
 	$Transition.show()
 	$Transition/Freeze.show()
-	$Transition/Freeze.texture = ImageTexture.create_from_image(get_viewport().get_texture().get_image())
+	# Capture what the fade covers: the game window while Battle redirects it there, else the root.
+	var fade_viewport: Viewport = $Transition.custom_viewport if $Transition.custom_viewport != null else get_viewport()
+	$Transition/Freeze.texture = ImageTexture.create_from_image(fade_viewport.get_texture().get_image())
 
 func close_freeze() -> void:
 	$Transition/Freeze.hide()

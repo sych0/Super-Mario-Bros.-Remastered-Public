@@ -132,6 +132,8 @@ func inf_time_check() -> void:
 		Global.inf_time = true
 
 func apply_resolution_enforcement() -> void:
+	if BattleScreen.owns_window():
+		return
 	if enforce_resolution != Vector2.ZERO:
 		get_tree().root.content_scale_size = enforce_resolution
 		get_tree().root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_KEEP
@@ -139,7 +141,9 @@ func apply_resolution_enforcement() -> void:
 		reset_resolution()
 
 func reset_resolution() -> void:
-	var idx = BattleHud.resolution_index(Settings.file.video.size)
+	if BattleScreen.owns_window():
+		return
+	var idx = Settings.file.video.size
 	var res = Global.RESOLUTIONS[idx]
 	get_tree().root.content_scale_size = res
 	get_tree().root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND if idx == Global.RESOLUTIONS.size() - 1 else Window.CONTENT_SCALE_ASPECT_KEEP

@@ -12,8 +12,9 @@ func _process(_delta: float) -> void:
 		return
 	show()
 	if is_instance_valid(get_tree().current_scene):
-		if is_instance_valid(get_tree().current_scene.get_viewport().get_camera_2d()):
-			$SubViewportContainer/SubViewport.world_2d = get_tree().current_scene.get_viewport().get_camera_2d().get_world_2d()
+		var game_camera: Camera2D = Global.get_game_viewport().get_camera_2d()
+		if is_instance_valid(game_camera):
+			$SubViewportContainer/SubViewport.world_2d = game_camera.get_world_2d()
 		else:
 			return
 	else:
