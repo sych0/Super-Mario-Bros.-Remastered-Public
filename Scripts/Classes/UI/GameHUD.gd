@@ -34,8 +34,8 @@ func handle_main_hud() -> void:
 	%PB.hide()
 	$Main/CoinCount/KeyCount.visible = KeyItem.total_collected > 0
 	%KeyAmount.text = "*" + str(KeyItem.total_collected).pad_zeros(2)
-	$Main.set_anchors_preset(Control.PRESET_CENTER_TOP if Settings.file.video.hud_size == 1 else Control.PRESET_TOP_WIDE, true)
-	$ModernHUD.set_anchors_preset(Control.PRESET_CENTER_TOP if Settings.file.video.hud_size == 1 else Control.PRESET_TOP_WIDE, true)
+	$Main.set_anchors_preset(Control.PRESET_CENTER_TOP if (Settings.file.video.hud_size == 1 or BattleHud.is_active()) else Control.PRESET_TOP_WIDE, true)
+	$ModernHUD.set_anchors_preset(Control.PRESET_CENTER_TOP if (Settings.file.video.hud_size == 1 or BattleHud.is_active()) else Control.PRESET_TOP_WIDE, true)
 	%Score.text = str(clamp(Global.score, 0, 9999990)).pad_zeros(6)
 	%CoinLabel.text = "*" + str(Global.coins).pad_zeros(2)
 	if current_chara != Global.player_characters[0]:
