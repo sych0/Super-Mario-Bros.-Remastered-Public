@@ -158,5 +158,13 @@ func test_layout(G) -> void:
 		if slots[i].intersects(l.center):
 			overlap = true
 	check(not overlap, "slots never overlap each other or the gameplay area")
+	for b in [l.badge_left, l.badge_right]:
+		for r in slots:
+			if r.intersects(b):
+				overlap = true
+		if b.intersects(l.center):
+			overlap = true
+	check(not overlap, "badges don't overlap slots or the gameplay area")
+	check(l.badge_left.position.x > slots[1].position.x and l.badge_right.end.x < slots[17].position.x, "badges sit in the inner top corners (course left, alive right)")
 	check(slots[0].position.x < l.center.position.x and slots[17].position.x >= l.center.end.x, "17 slots per side (left 1-17, right 18-34)")
-	check(slots[0].size.x / slots[0].size.y > 1.0 and slots[0].size.x / slots[0].size.y < 1.2, "slots keep roughly the gameplay aspect (%s)" % slots[0].size)
+	check(slots[0].size.x / slots[0].size.y > 0.7 and slots[0].size.x / slots[0].size.y < 0.85, "slots are portrait like the reference (%s)" % slots[0].size)

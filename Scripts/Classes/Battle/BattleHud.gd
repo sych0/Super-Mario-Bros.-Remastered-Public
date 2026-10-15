@@ -9,7 +9,11 @@ extends CanvasLayer
 const FONT_PATH := "res://Resources/ThemedResources/FontMain.tres"
 ## Global.RESOLUTIONS[2] = 426x240, the game's existing native 16:9 option.
 const RESOLUTION_INDEX := 2
-const PANEL_COLOR := Color(0.03, 0.03, 0.1, 1)
+const PANEL_COLOR := Color(0.97, 0.70, 0.14, 1) # reference's gold background
+const PANEL_EDGE := Color(0.93, 0.55, 0.08, 1)
+const BADGE_FILL := Color(0.99, 0.97, 0.9, 1)
+const BADGE_EDGE := Color(0.4, 0.22, 0.1, 1)
+const BADGE_TEXT := Color(0.25, 0.14, 0.06, 1)
 
 static var instance: BattleHud = null
 
@@ -21,8 +25,10 @@ var result_text := ""
 var result_age := 0.0
 var _font: Font = null
 var _time_label := Label.new()
-var _alive_label := Label.new()
 var _rank_label := Label.new()
+var _alive_label := Label.new() # alive count in the right badge, over "/35"
+var _course_label := Label.new() # "W-L" in the left badge
+var _total_label := Label.new()
 var _overlay := ColorRect.new()
 var _overlay_label := Label.new()
 
@@ -74,6 +80,13 @@ func _build(layout_: Dictionary) -> void:
 		panel.size = layout[side].size
 		panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		add_child(panel)
+		# Darker stripe on the edge next to the gameplay area, like the reference's frame.
+		var edge := ColorRect.new()
+		edge.color = PANEL_EDGE
+		edge.size = Vector2(2, panel.size.y)
+		edge.position = Vector2(panel.size.x - 2 if side == "left" else 0, 0)
+		edge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		panel.add_child(edge)
 	for i in BattleHudLayout.OPPONENTS:
 		var surface := BattlePreviewSurface.new(i + 1, _font)
 		var rect: Rect2 = layout.slots[i]
@@ -81,11 +94,29 @@ func _build(layout_: Dictionary) -> void:
 		surface.size = rect.size
 		add_child(surface)
 		surfaces.append(surface)
-	var left: Rect2 = layout.status_left
-	var right: Rect2 = layout.status_right
-	_place(_time_label, left.position, left.size)
-	_place(_alive_label, right.position, Vector2(right.size.x, right.size.y / 2.0))
-	_place(_rank_label, right.position + Vector2(0, right.size.y / 2.0), Vector2(right.size.x, right.size.y / 2.0))
+	_place(_time_label, layout.status_left, 1.0)
+	_place(_rank_label, layout.status_right, 1.0)
+	_time_label.add_theme_color_override("font_color", BADGE_TEXT)
+	_rank_label.add_theme_color_override("font_color", BADGE_TEXT)
+	var badge_l: Rect2 = layout.badge_left
+	var badge_r: Rect2 = layout.badge_right
+	_add_badge(badge_l)
+	_add_badge(badge_r)
+	# Course "W-L" sits low in the left badge (the reference's "COURSE" caption does not fit 26 px).
+	_place(_course_label, Rect2(badge_l.position + Vector2(2, badge_l.size.y - 14), Vector2(badge_l.size.x, 12)), 0.85)
+	# Small Mario head icon above the alive count.
+	var icon := ColorRect.new()
+	icon.color = Color(0.85, 0.15, 0.1)
+	icon.position = badge_r.position + Vector2(badge_r.size.x / 2.0 - 4, 3)
+	icon.size = Vector2(8, 8)
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(icon)
+	# Alive count over a fixed "/35" (the reference's "35/35", stacked to fit the narrow badge).
+	_place(_alive_label, Rect2(badge_r.position + Vector2(2, badge_r.size.y - 27), Vector2(badge_r.size.x, 12)), 0.85)
+	_place(_total_label, Rect2(badge_r.position + Vector2(2, badge_r.size.y - 14), Vector2(badge_r.size.x, 12)), 0.85)
+	_total_label.text = "/%d" % BattleSession.CONTESTANT_COUNT
+	for l in [_course_label, _alive_label, _total_label]:
+		l.add_theme_color_override("font_color", BADGE_TEXT)
 	var center: Rect2 = layout.center
 	_overlay.color = Color(0, 0, 0, 0.88)
 	_overlay.position = center.position
@@ -98,10 +129,24 @@ func _build(layout_: Dictionary) -> void:
 	_style(_overlay_label)
 	_overlay.add_child(_overlay_label)
 
-func _place(label: Label, pos: Vector2, size: Vector2) -> void:
-	label.position = pos
-	label.size = size
-	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+func _add_badge(rect: Rect2) -> void:
+	var edge := ColorRect.new()
+	edge.color = BADGE_EDGE
+	edge.position = rect.position
+	edge.size = rect.size
+	edge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(edge)
+	var fill := ColorRect.new()
+	fill.color = BADGE_FILL
+	fill.position = Vector2(1, 1)
+	fill.size = rect.size - Vector2(2, 2)
+	fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	edge.add_child(fill)
+
+func _place(label: Label, rect: Rect2, text_scale: float) -> void:
+	label.position = rect.position
+	label.size = rect.size / text_scale
+	label.scale = Vector2(text_scale, text_scale)
 	_style(label)
 	add_child(label)
 
@@ -129,10 +174,11 @@ func refresh() -> void:
 	for i in surfaces.size():
 		surfaces[i].refresh(session.contestants[i + 1])
 	var p := session.get_player()
-	_time_label.text = "TIME\n%03d" % maxi(p.time_left, 0)
-	var speed := "" if BattleHandler.sim_speed() == 1 else "\nX%d" % BattleHandler.sim_speed()
-	_alive_label.text = "ALIVE\n%d" % session.alive_count + speed
+	var speed := "" if BattleHandler.sim_speed() == 1 else " X%d" % BattleHandler.sim_speed()
+	_time_label.text = "TIME\n%03d%s" % [maxi(p.time_left, 0), speed]
 	_rank_label.text = "RANK\n%d/%d" % [session.get_provisional_rank(), BattleSession.CONTESTANT_COUNT]
+	_alive_label.text = "%d" % session.alive_count
+	_course_label.text = "%d-%d" % [session.world, session.level]
 
 ## Shows the end-of-match overlay for `final_session`. `others_alive` is how many opponents
 ## were still in when the player went out.
