@@ -87,6 +87,12 @@ func report_level_start(world_: int, level_: int) -> void:
 	level = level_
 	get_player().progress = 0.0
 
+## Live in-level progress of the real player (0..1). Only moves forward within a level.
+func report_player_progress(value: float) -> void:
+	var p := get_player()
+	if p.alive and not finished:
+		p.progress = maxf(p.progress, clampf(value, 0.0, 1.0))
+
 func report_level_complete() -> void:
 	var p := get_player()
 	if p.alive and not finished:
@@ -145,6 +151,18 @@ func _finish(winner: int) -> void:
 
 func _sort_best_first(arr: Array[BattleContestant]) -> void:
 	arr.sort_custom(func(a: BattleContestant, b: BattleContestant) -> bool: return a.outranks(b))
+
+## Current standing of `id` (1 = best). Alive contestants are ranked against the other
+## survivors with the normal rule; KO'd contestants return their final placement.
+func get_provisional_rank(id := PLAYER_ID) -> int:
+	var c := contestants[id]
+	if not c.alive:
+		return c.placement
+	var rank := 1
+	for other in contestants:
+		if other.alive and other != c and other.outranks(c):
+			rank += 1
+	return rank
 
 ## Contestant ids ordered by placement (1st first). Only complete once `finished`.
 func get_ranking() -> Array[int]:
