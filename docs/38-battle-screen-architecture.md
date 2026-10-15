@@ -1,6 +1,6 @@
 # 38 — Battle Mode: screen composition, preview resolution, round lifecycle
 
-Status: architecture revision, written against `6a74b47`. Milestone 1 is implemented: see doc 39. It replaces the screen-composition
+Status: architecture revision, written against `6a74b47`. Milestone 1 is implemented: see doc 39. Milestone 2 (previews at resolution) is implemented: see doc 40. It replaces the screen-composition
 parts of docs 36 and 37 (listed in section 1). The approach was checked with prototypes in
 Godot 4.6 on the project's own renderer (Compatibility / GLES3). The pictures are in
 `docs/battle-screen/` and can be reproduced with `tests/tools/battle_screen_spike.gd`. That

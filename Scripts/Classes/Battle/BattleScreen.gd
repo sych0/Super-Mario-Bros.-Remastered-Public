@@ -37,9 +37,11 @@ var layout := {}
 var game_container: SubViewportContainer = null ## the centre window on the canvas
 var game_viewport: SubViewport = null ## the classic 256x240 game
 var game_scene: Node = null ## whatever currently runs inside GameViewport
-var surfaces: Array[BattlePreviewSurface] = []
-var driver: BattlePreviewDriver = null ## drives the live previews (opponent #1 only, unless debug_all)
-var debug_surface: BattlePreviewSurface = null ## dev only: opponent #1 at full size over the window
+var atlas: BattlePreviewAtlas = null ## the one shared render target holding all 34 preview cells
+var cells: Array[BattlePreviewCell] = [] ## 187x240 pictures, in the atlas (index = contestant id - 1)
+var panes: Array[BattleOpponentPane] = [] ## 32x41 windows on the canvas, each showing its own atlas region
+var driver: BattlePreviewDriver = null ## drives the live previews (all 34 on World 1-1)
+var debug_view: TextureRect = null ## dev only: opponent #1's atlas cell at native size over the window
 var audio_listener: AudioListener2D = null
 var showing_result := false
 var result_text := ""
@@ -249,13 +251,7 @@ func _build(l: Dictionary) -> void:
 	_rect(self, l.strip_a, STRIP_A_COLOR).name = "StripA"
 	_rect(self, l.strip_b, STRIP_B_COLOR).name = "StripB"
 	_build_game_window(l.game)
-	for i in BattleHudLayout.OPPONENTS:
-		var surface := BattlePreviewSurface.new(i + 1, _font)
-		var rect: Rect2 = l.slots[i]
-		surface.position = rect.position
-		surface.size = rect.size
-		add_child(surface)
-		surfaces.append(surface)
+	_build_previews(l)
 	_place(_time_label, l.status_left, 0.75)
 	_place(_rank_label, l.status_right, 0.75)
 	_time_label.add_theme_color_override("font_color", BADGE_TEXT)
@@ -314,6 +310,26 @@ func _build_game_window(game: Rect2) -> void:
 	add_child(audio_listener)
 	audio_listener.make_current()
 
+## The previews (doc 38, section 6): one atlas SubViewport holding 34 full-resolution cells, and 34
+## canvas panes that each show their own region of it, smoothly downsampled.
+func _build_previews(l: Dictionary) -> void:
+	atlas = BattlePreviewAtlas.new()
+	add_child(atlas)
+	var atlas_texture := atlas.get_texture()
+	for i in BattleHudLayout.OPPONENTS:
+		var cell := BattlePreviewCell.new(i + 1)
+		var region := BattlePreviewAtlas.cell_rect(i)
+		cell.position = Vector2(region.position)
+		atlas.add_child(cell)
+		cells.append(cell)
+		var pane := BattleOpponentPane.new(i + 1, _font)
+		var rect: Rect2 = l.slots[i]
+		pane.position = rect.position
+		pane.size = rect.size
+		pane.bind(atlas_texture, region, cell)
+		add_child(pane)
+		panes.append(pane)
+
 func _rect(parent: Node, r: Rect2, color: Color) -> ColorRect:
 	var node := ColorRect.new()
 	node.position = r.position
@@ -360,44 +376,50 @@ func _process(delta: float) -> void:
 	refresh()
 	if driver != null:
 		for id in driver.update(BattleHandler.presentation_alpha):
-			surfaces[id - 1].queue_redraw()
-			if id == 1 and debug_surface != null:
-				debug_surface.queue_redraw()
+			cells[id - 1].queue_redraw()
 
 func _follow_game_camera() -> void:
 	var camera := game_viewport.get_camera_2d()
 	if camera != null:
 		audio_listener.global_position = camera.get_screen_center_position()
 
-## Creates the preview driver for the current session (once). If the level or its art can't be
-## built, nothing live is shown and every window keeps the placeholder.
+## Creates the preview driver for the current session (once). All 34 opponents get a track and
+## draw live while they are on World 1-1; a cell falls back to the placeholder on its own whenever
+## its frame is not valid (another course, or the run is over). If the level or its art can't be
+## built, nothing live is shown and every cell keeps the placeholder.
 func _ensure_driver() -> void:
 	if session == null or not live_previews or (driver != null and driver.session == session):
 		return
 	driver = null
-	var cell: Vector2 = layout.cell
-	var ids: Array = range(1, BattleHudLayout.OPPONENTS + 1) if BattlePreviewDriver.debug_all() else [1]
-	driver = BattlePreviewDriver.create(session, ids, cell.x / cell.y * BattlePreviewSurface.LOGICAL_HEIGHT)
+	var ids: Array = range(1, BattleHudLayout.OPPONENTS + 1)
+	driver = BattlePreviewDriver.create(session, ids, float(BattlePreviewAtlas.CELL_PX.x))
 	if driver == null:
 		return
 	for id in driver.tracks:
-		surfaces[id - 1].set_live(BattleMiniGameRenderer.new(), driver.tracks[id].frame)
-	if BattlePreviewDriver.debug_full_view() and debug_surface == null:
+		cells[id - 1].set_live(BattleMiniGameRenderer.new(), driver.tracks[id].frame)
+	if BattlePreviewDriver.debug_full_view() and debug_view == null:
+		# The same atlas region the pane samples, at its native size: no second render.
+		var region := BattlePreviewAtlas.cell_rect(0)
+		var tex := AtlasTexture.new()
+		tex.atlas = atlas.get_texture()
+		tex.region = Rect2(region)
+		debug_view = TextureRect.new()
+		debug_view.name = "DebugCell1"
+		debug_view.texture = tex
+		debug_view.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		debug_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		var game: Rect2 = layout.game
-		debug_surface = BattlePreviewSurface.new(1, _font)
-		debug_surface.position = game.position
-		debug_surface.size = game.size
-		debug_surface.set_live(BattleMiniGameRenderer.new(), driver.tracks[1].frame)
-		add_child(debug_surface)
+		debug_view.size = Vector2(region.size)
+		debug_view.position = game.position + Vector2(floorf((game.size.x - debug_view.size.x) / 2.0), 0)
+		_overlay_layer.add_child(debug_view)
 
-## Re-reads the session into the surfaces and labels.
+## Re-reads the session into the cells, panes and labels.
 func refresh() -> void:
 	if session == null:
 		return
-	for i in surfaces.size():
-		surfaces[i].refresh(session.contestants[i + 1])
-	if debug_surface != null:
-		debug_surface.refresh(session.contestants[1])
+	for i in cells.size():
+		cells[i].refresh(session.contestants[i + 1])
+		panes[i].refresh(session.contestants[i + 1])
 	var p := session.get_player()
 	var speed := "" if BattleHandler.sim_speed() == 1 else " X%d" % BattleHandler.sim_speed()
 	_time_label.text = "TIME %03d%s" % [maxi(p.time_left, 0), speed]

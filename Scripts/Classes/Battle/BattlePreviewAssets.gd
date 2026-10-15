@@ -2,7 +2,7 @@ class_name BattlePreviewAssets
 extends RefCounted
 ## Baked art for one level's opponent previews, shared by every preview on that level: one
 ## level-sized "strip" texture (terrain, deco, blocks, pipes, flagpole, castle), the parallax
-## hills, and small mipmapped sprite frames for Mario and the enemies. Everything comes from
+## hills, and small sprite frames for Mario and the enemies. Everything comes from
 ## the game's real artwork through BattlePreviewResolver, so resource packs and themes apply.
 ## Mipmaps matter: previews are drawn at ~0.15x, where raw nearest-filtered pixels alias.
 ##
@@ -119,7 +119,6 @@ func _bake() -> bool:
 
 func _texture(img: Image) -> ImageTexture:
 	img.fix_alpha_edges()
-	img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
 
 func _bake_hills(hill: Dictionary) -> void:

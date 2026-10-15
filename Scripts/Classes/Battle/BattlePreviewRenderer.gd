@@ -1,7 +1,7 @@
 class_name BattlePreviewRenderer
 extends RefCounted
-## Draws the inside of one opponent preview in a fixed logical 256x240 space (the classic
-## gameplay area). A BattlePreviewSurface scales that space into its slot, so a future
+## Draws the inside of one opponent preview at 1:1 gameplay scale into a BattlePreviewCell
+## (187x240 texels of the shared atlas); the pane scales the picture down. So a future
 ## renderer can show simplified real gameplay (sprites, enemies, attacks) by overriding
 ## draw() without any change to the screen layout.
 

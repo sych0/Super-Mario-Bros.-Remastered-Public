@@ -138,9 +138,11 @@ func _run() -> void:
 	# -- the window is exactly the classic 256-wide view, not a wider level under the panels ------------
 	check(is_sky(px(img, 112, 100)) and is_sky(px(img, 367, 100)), "the window's first and last columns are the level (sky)")
 	check(not is_sky(px(img, 111, 100)) and not is_sky(px(img, 368, 100)), "the level does not continue past the window edge")
+	# Around the window means the margins, the gaps and the frame; the opponent panes (x 4..104 and 376..476)
+	# legitimately show sky now that every pane is a live 1-1 preview.
 	var sky_outside := 0
 	for y in [20, 60, 100, 140, 180, 220, 255, 264]:
-		for x in [0, 2, 40, 106, 108, 371, 372, 374, 440, 479]:
+		for x in [0, 2, 106, 108, 371, 372, 374, 479]:
 			if is_sky(px(img, x, y)):
 				sky_outside += 1
 	check(sky_outside == 0, "no level sky anywhere around the window (%d sampled pixels)" % sky_outside)

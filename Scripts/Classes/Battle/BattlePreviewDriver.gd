@@ -6,23 +6,16 @@ extends RefCounted
 ## own state, and everything the HUD shows from it, is never delayed.
 
 const LAG := 2.0
-const LIVE_COURSE := 0 ## milestone 1: only the first course (World 1-1) has a live preview
+const LIVE_COURSE := 0 ## only the first course (World 1-1) has a live preview; every other course uses the placeholder
 const DEBUG_VIEW_ARG := "--battle-preview-debug"
 const DEBUG_VIEW_ENV := "SMB1R_BATTLE_PREVIEW_DEBUG"
-const DEBUG_ALL_ARG := "--battle-preview-all"
-const DEBUG_ALL_ENV := "SMB1R_BATTLE_PREVIEW_ALL"
 
 static var _flag_cache := {}
 
-## DEVELOPMENT ONLY (debug builds): `--battle-preview-debug` (after `--`) also draws opponent
-## #1 at full 256x240 over the centre.
+## DEVELOPMENT ONLY (debug builds): `--battle-preview-debug` (after `--`) also shows opponent
+## #1's atlas cell at its native 187x240 over the centre (the same image, not a second render).
 static func debug_full_view() -> bool:
 	return _flag(DEBUG_VIEW_ARG, DEBUG_VIEW_ENV)
-
-## DEVELOPMENT ONLY (debug builds): `--battle-preview-all` puts all 34 windows on the live
-## renderer, to measure its cost. Normal play uses it for opponent #1 only.
-static func debug_all() -> bool:
-	return _flag(DEBUG_ALL_ARG, DEBUG_ALL_ENV)
 
 static func _flag(arg: String, env: String) -> bool:
 	if _flag_cache.has(arg):

@@ -6,12 +6,11 @@ extends SceneTree
 ##     --rendering-driver opengl3 --rendering-method gl_compatibility --resolution 1920x1080 \
 ##     -s tests/tools/battle_preview_capture.gd -- out=/some/dir seed=19 shots=screen@40,cell@40
 ## shots: comma list of <kind>@<tick> where kind is `screen` (the whole Battle screen as the display
-## shows it), `full` (opponent #1 enlarged to 256x240 over the game window, needs the debug env var)
-## or `cell` (just opponent #1's pane). tick is the session tick to show; fractional ticks (46.5) show
+## shows it), `full` (opponent #1's atlas cell at its native 187x240, needs the debug env var),
+## `cell` (just opponent #1's pane), or `left` / `right` (a whole side panel). tick is the session tick to show; fractional ticks (46.5) show
 ## part-way through that second.
 ## Optional: window=WxH resizes the game window first; pack=<resource pack name> adds a pack at the
-## front of the pack list for this run only (see make_standin_pack.py). SMB1R_BATTLE_PREVIEW_ALL=1 puts
-## every pane on the live renderer.
+## front of the pack list for this run only (see make_standin_pack.py). All 34 panes are live on 1-1.
 ## (The Battle canvas is always CANVAS_ITEMS and the game window always pixel-perfect, so the old
 ## pixel / smooth visuals switch no longer applies here.)
 
@@ -82,12 +81,11 @@ func _run() -> void:
 		Handler.presentation_alpha = shot.alpha
 		if screen.driver != null:
 			screen.driver.update(shot.alpha)
-		for surface in screen.surfaces:
-			if surface.is_live():
-				surface.queue_redraw() # we advanced the previews by hand, so tell the panes
-		if screen.debug_surface != null:
-			screen.debug_surface.queue_redraw()
-			screen.debug_surface.visible = shot.kind == "full"
+		for cell in screen.cells:
+			if cell.is_live():
+				cell.queue_redraw() # we advanced the previews by hand, so tell the cells
+		if screen.debug_view != null:
+			screen.debug_view.visible = shot.kind == "full"
 		await frames(4)
 		await RenderingServer.frame_post_draw
 		var img := DisplayServer.screen_get_image(0)
@@ -116,5 +114,11 @@ func _crop(img: Image, kind: String) -> Image:
 	if kind == "screen":
 		return img
 	var scale := img.get_width() / 480.0
-	var r: Rect2 = screen.layout.game if kind == "full" else screen.layout.slots[0]
+	var r: Rect2 = screen.layout.slots[0]
+	if kind == "full":
+		r = Rect2(screen.debug_view.position, screen.debug_view.size)
+	elif kind == "left":
+		r = screen.layout.left
+	elif kind == "right":
+		r = screen.layout.right
 	return img.get_region(Rect2i(Vector2i(r.position * scale), Vector2i(r.size * scale)))

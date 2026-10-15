@@ -157,11 +157,11 @@ func test_composition() -> void:
 	check(order.has("Wallpaper") and order.has("GameWindow") and order.Wallpaper < order.Frame and order.Frame < order.GameWindow, "wallpaper and frame are drawn behind the game window")
 	var wallpaper: ColorRect = scr.get_node("Wallpaper")
 	check(wallpaper.get_rect() == Rect2(0, 0, 480, 270) and wallpaper.color == BS.WALLPAPER, "wallpaper is the gold background of the whole canvas")
-	check(scr.surfaces.size() == 34, "34 opponent panes")
+	check(scr.panes.size() == 34, "34 opponent panes")
 	var screen_rect := Rect2(Vector2.ZERO, Vector2(480, 270))
 	var game_rect: Rect2 = scr.layout.game
 	var clear := true
-	for pane in scr.surfaces:
+	for pane in scr.panes:
 		var r := Rect2(pane.position, pane.size)
 		if r.intersects(game_rect) or not screen_rect.encloses(r) or not pane.visible or pane.get_parent() != scr:
 			clear = false

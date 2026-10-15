@@ -1,7 +1,7 @@
 # 39 — Battle screen, milestone 1 (composition): what was built and what it taught
 
-Status: implemented on top of `534e2b3`. Follows doc 38 (milestone 1 of section 10). Milestones 2-4 are
-not started.
+Status: implemented on top of `534e2b3`. Follows doc 38 (milestone 1 of section 10). Milestone 2 followed (see doc 40);
+milestones 3-4 are not started.
 
 ## 1. What now exists
 

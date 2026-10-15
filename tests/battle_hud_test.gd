@@ -48,11 +48,11 @@ func _run() -> void:
 	root.add_child(screen)
 	await frames(3)
 	check(BS.instance == screen and BS.is_active(), "the screen registers itself as the Battle screen")
-	check(screen.surfaces.size() == 34, "34 opponent preview surfaces")
+	check(screen.panes.size() == 34, "34 opponent preview panes")
 	var ids := []
-	for t in screen.surfaces:
+	for t in screen.panes:
 		ids.append(t.contestant_id)
-	check(ids == range(1, 35), "surfaces are contestants 1..34")
+	check(ids == range(1, 35), "panes are contestants 1..34")
 	check(screen._alive_label.text.contains("35"), "status shows 35 alive (%s)" % screen._alive_label.text)
 	check(screen._time_label.text == "TIME 600", "timer comes from the session (%s)" % screen._time_label.text)
 	check(screen._course_label.text == "1-1", "course badge shows 1-1 (%s)" % screen._course_label.text)
@@ -60,19 +60,19 @@ func _run() -> void:
 	# Data binding.
 	s.report_ko(7, s.KoCause.HAZARD)
 	await frames(2)
-	check(screen.surfaces[6].ko, "KO propagates to preview 7")
-	check(screen.surfaces.filter(func(t): return t.ko).size() == 1, "only the KO'd preview is marked")
+	check(screen.panes[6].ko, "KO propagates to preview 7")
+	check(screen.panes.filter(func(t): return t.ko).size() == 1, "only the KO'd preview is marked")
 	check(screen._alive_label.text == "34", "remaining count reflects the session (%s)" % screen._alive_label.text)
 	for i in 30:
 		s.step()
 	await frames(2)
 	check(screen._time_label.text == "TIME 570", "timer follows session ticks (%s)" % screen._time_label.text)
-	var moved: int = screen.surfaces.filter(func(t): return not t.ko and t.progress > 0.0).size()
-	check(moved > 0, "bot progress reaches the preview surfaces")
+	var moved: int = screen.panes.filter(func(t): return not t.ko and t.cell.progress > 0.0).size()
+	check(moved > 0, "bot progress reaches the preview cells")
 	check(screen._rank_label.text == "RANK %d/35" % s.get_provisional_rank(), "rank matches the session (%s)" % screen._rank_label.text)
 	s.report_player_progress(0.9)
 	check(s.get_provisional_rank() == 1 or s.get_provisional_rank() < 35, "player progress feeds rank")
-	check(screen.driver == null or screen.driver.tracks.size() >= 1, "the live preview driver (opponent #1) is optional, never required")
+	check(screen.driver == null or screen.driver.tracks.size() >= 1, "the live preview driver (all 34 opponents) is optional, never required")
 
 	# The result overlay (interim, until the round lifecycle exists) is a view of the finished session.
 	var others: int = s.alive_count

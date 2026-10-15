@@ -2,14 +2,14 @@ class_name BattleMiniGameRenderer
 extends BattlePreviewRenderer
 ## Draws a BattlePreviewFrame: sky, parallax hills, a window onto the baked level strip, the
 ## flag, enemies and Mario, then the level-end fade. Everything is a handful of textured
-## quads (the strip is one region draw), all mipmapped, so 34 of these stay cheap.
+## quads (the strip is one region draw), so 34 of these stay cheap.
 ##
-## The view is a zoomed-in crop of the classic 240-px-tall camera anchored on the ground, so
-## Mario and the terrain are bigger in a narrow cell; actors are a little larger still so
-## they stay readable at this size.
+## It draws at the classic camera's own scale (1:1 texels, 240 px tall, anchored on the ground)
+## into a BattlePreviewAtlas cell, so Mario, enemies and terrain are normal gameplay-size art.
+## The shrinking into a small pane is done afterwards by the pane, not here.
 
-const ZOOM := 1.6
-const ACTOR_SCALE := 1.35
+const ZOOM := 1.0
+const ACTOR_SCALE := 1.0
 const VIEW_BOTTOM := 32.0 ## world y of the bottom edge of the view (ground top is y = 0)
 const HILL_PARALLAX := 0.5
 const HILL_REPEAT := 512.0
@@ -24,7 +24,7 @@ func draw(canvas: CanvasItem, _contestant: BattleContestant, size: Vector2, f: B
 	var a := f.assets
 	var z := ZOOM
 	var vw := size.x / z
-	var cam := clampf(f.camera_x - (vw - f.view_w) * BattlePreviewTrack.CAMERA_FOCUS, f.cam_min, maxf(f.cam_min, f.cam_max - vw))
+	var cam := roundf(clampf(f.camera_x - (vw - f.view_w) * BattlePreviewTrack.CAMERA_FOCUS, f.cam_min, maxf(f.cam_min, f.cam_max - vw))) # whole texels, like the classic camera
 	canvas.draw_rect(Rect2(Vector2.ZERO, size), a.sky_color)
 	# hills
 	if a.hills != null:
@@ -56,7 +56,7 @@ func draw(canvas: CanvasItem, _contestant: BattleContestant, size: Vector2, f: B
 		canvas.draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, f.fade))
 
 func _sprite(canvas: CanvasItem, spr: BattlePreviewSprite, wx: float, wy: float, flip: bool, cam: float, size: Vector2, scale_: float) -> void:
-	var feet := Vector2((wx - cam) * ZOOM, (wy - VIEW_BOTTOM) * ZOOM + size.y)
+	var feet := Vector2((wx - cam) * ZOOM, (wy - VIEW_BOTTOM) * ZOOM + size.y).round()
 	var r := Rect2(feet + spr.offset * scale_, spr.size * scale_)
 	if flip:
 		r = Rect2(r.position.x + r.size.x, r.position.y, -r.size.x, r.size.y)
