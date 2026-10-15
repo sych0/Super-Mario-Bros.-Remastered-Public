@@ -16,10 +16,14 @@ const BADGE_EDGE := Color(0.4, 0.22, 0.1, 1)
 const BADGE_TEXT := Color(0.25, 0.14, 0.06, 1)
 
 static var instance: BattleHud = null
+## Dev/test switch: false keeps every window on the placeholder (previews off).
+static var live_previews := true
 
 var session: BattleSession = null # the session being displayed (kept alive for the result)
 var layout := {}
 var surfaces: Array[BattlePreviewSurface] = []
+var driver: BattlePreviewDriver = null ## drives the live previews (opponent #1 only, unless debug_all)
+var debug_surface: BattlePreviewSurface = null ## dev only: opponent #1 at full size
 var showing_result := false
 var result_text := ""
 var result_age := 0.0
@@ -64,6 +68,9 @@ func _ready() -> void:
 func _exit_tree() -> void:
 	if instance == self:
 		instance = null
+	# Level-sized preview art is only needed while Battle is up.
+	BattlePreviewAssets.clear_cache()
+	BattleLevelSketch.clear_cache()
 	# Hand the window back to the user's own resolution setting (same rule as Level).
 	var tree := get_tree()
 	if tree != null and Settings.file != null:
@@ -165,7 +172,34 @@ func _process(delta: float) -> void:
 		queue_free()
 		return
 	session = BattleSession.current
+	_ensure_driver()
 	refresh()
+	if driver != null:
+		for id in driver.update(BattleHandler.presentation_alpha):
+			surfaces[id - 1].queue_redraw()
+			if id == 1 and debug_surface != null:
+				debug_surface.queue_redraw()
+
+## Creates the preview driver for the current session (once). If the level or its art can't be
+## built, nothing live is shown and every window keeps the placeholder.
+func _ensure_driver() -> void:
+	if session == null or not live_previews or (driver != null and driver.session == session):
+		return
+	driver = null
+	var cell: Vector2 = layout.cell
+	var ids: Array = range(1, BattleHudLayout.OPPONENTS + 1) if BattlePreviewDriver.debug_all() else [1]
+	driver = BattlePreviewDriver.create(session, ids, cell.x / cell.y * BattlePreviewSurface.LOGICAL_HEIGHT)
+	if driver == null:
+		return
+	for id in driver.tracks:
+		surfaces[id - 1].set_live(BattleMiniGameRenderer.new(), driver.tracks[id].frame)
+	if BattlePreviewDriver.debug_full_view() and debug_surface == null:
+		var center: Rect2 = layout.center
+		debug_surface = BattlePreviewSurface.new(1, _font)
+		debug_surface.position = center.position
+		debug_surface.size = center.size
+		debug_surface.set_live(BattleMiniGameRenderer.new(), driver.tracks[1].frame)
+		add_child(debug_surface)
 
 ## Re-reads the session into the surfaces and labels.
 func refresh() -> void:
@@ -173,6 +207,8 @@ func refresh() -> void:
 		return
 	for i in surfaces.size():
 		surfaces[i].refresh(session.contestants[i + 1])
+	if debug_surface != null:
+		debug_surface.refresh(session.contestants[1])
 	var p := session.get_player()
 	var speed := "" if BattleHandler.sim_speed() == 1 else " X%d" % BattleHandler.sim_speed()
 	_time_label.text = "TIME\n%03d%s" % [maxi(p.time_left, 0), speed]

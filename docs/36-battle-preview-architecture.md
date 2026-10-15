@@ -1,6 +1,8 @@
 # 36 — Battle Mode: Opponent Preview Architecture
 
-Status: proposal, written against `881e42b`. Nothing here is implemented yet.
+Status: proposal, written against `881e42b`. Milestone 1 (section 10) is implemented; see
+`37-battle-preview-milestone-1.md` for what was built, what changed from this proposal, and the
+measurements. Everything after milestone 1 is still a proposal.
 
 Goal: each of the 34 opponent windows should look like a tiny live Mario run, like
 Super Mario Bros. 35. It should do that without hidden game copies, without `Player` nodes

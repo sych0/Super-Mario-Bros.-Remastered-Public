@@ -12,6 +12,10 @@ const SPEED_ARG := "--battle-sim-speed="
 const SPEED_ENV := "SMB1R_BATTLE_SIM_SPEED"
 
 static var _sim_speed := -1
+## DISPLAY ONLY: how far through the current Battle second the clock is (0..1). The opponent
+## previews use it to animate smoothly between session ticks; the session never reads it.
+## It freezes with the handler, so previews stop while the game is paused.
+static var presentation_alpha := 0.0
 static var ending_session: BattleSession = null
 
 ## DEVELOPMENT ONLY: multiplies how fast the Battle clock/bots run so a short test shows a
@@ -73,6 +77,7 @@ func _process(delta: float) -> void:
 	while accumulator >= step_seconds and not session.finished:
 		accumulator -= step_seconds
 		session.step()
+	presentation_alpha = clampf(accumulator / step_seconds, 0.0, 1.0)
 	_report_progress(session)
 	# The session timer is authoritative; the level timer just mirrors it for display.
 	Global.time = maxi(session.get_player().time_left, 0)
@@ -95,8 +100,7 @@ func _report_progress(session: BattleSession) -> void:
 		progress_searched = true
 		progress_start_x = player.global_position.x
 		for n in owner_level_nodes():
-			var script := n.get_script() as Script
-			if script != null and (script.resource_path.ends_with("EndFlagpole.gd") or script.resource_path.ends_with("CastleBridge.gd")):
+			if BattleCourse.is_goal_script(n.get_script() as Script):
 				progress_end_x = (n as Node2D).global_position.x
 				break
 		progress_ready = progress_end_x > progress_start_x + 16.0

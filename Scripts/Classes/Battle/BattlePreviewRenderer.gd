@@ -5,5 +5,7 @@ extends RefCounted
 ## renderer can show simplified real gameplay (sprites, enemies, attacks) by overriding
 ## draw() without any change to the screen layout.
 
-func draw(_canvas: CanvasItem, _contestant: BattleContestant, _logical_size: Vector2) -> void:
+## `_frame` is only set by renderers that reenact a run (see BattlePreviewTrack); the
+## placeholder ignores it.
+func draw(_canvas: CanvasItem, _contestant: BattleContestant, _logical_size: Vector2, _frame: BattlePreviewFrame = null) -> void:
 	pass

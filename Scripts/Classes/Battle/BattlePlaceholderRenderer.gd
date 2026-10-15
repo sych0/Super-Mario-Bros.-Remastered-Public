@@ -13,7 +13,7 @@ const HILL_SPACING := 176.0
 const LEVEL_SCROLL := 1056.0 # logical px a full level's progress scrolls the background
 const MARIO_COLORS := [Color(0.85, 0.15, 0.1), Color(0.85, 0.15, 0.1), Color(1.0, 0.75, 0.2)]
 
-func draw(canvas: CanvasItem, c: BattleContestant, size: Vector2) -> void:
+func draw(canvas: CanvasItem, c: BattleContestant, size: Vector2, _frame: BattlePreviewFrame = null) -> void:
 	canvas.draw_rect(Rect2(Vector2.ZERO, size), SKY)
 	var ground_y := size.y - GROUND_H
 	var scroll := clampf(c.progress, 0.0, 1.0) * LEVEL_SCROLL + c.levels_cleared * 37.0

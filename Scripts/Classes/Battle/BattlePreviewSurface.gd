@@ -16,8 +16,18 @@ var contestant_id := 0
 var ko := false
 var levels_cleared := 0
 var progress := 0.0
-var renderer: BattlePreviewRenderer = BattlePlaceholderRenderer.new()
+var renderer: BattlePreviewRenderer = BattlePlaceholderRenderer.new() ## the fallback
+## Optional live renderer + the frame a BattlePreviewTrack keeps updating. Used only while the
+## frame is valid; any time it isn't (unsupported level, run over) the placeholder draws.
+var live_renderer: BattlePreviewRenderer = null
+var frame: BattlePreviewFrame = null
 var font: Font = null
+
+## Dev measurements: microseconds spent inside renderers' draw() and how many draws ran.
+static var stat_live_us := 0
+static var stat_live_draws := 0
+static var stat_placeholder_us := 0
+static var stat_placeholder_draws := 0
 
 var _contestant: BattleContestant = null
 var _signature := ""
@@ -40,24 +50,49 @@ func refresh(c: BattleContestant) -> void:
 		_signature = sig
 		queue_redraw()
 
+## Attaches (or, with null, detaches) a live preview. Mipmapped filtering is set on this
+## surface only, because the live renderer draws heavily minified textures.
+func set_live(live_renderer_: BattlePreviewRenderer, frame_: BattlePreviewFrame) -> void:
+	live_renderer = live_renderer_
+	frame = frame_
+	texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS if live_renderer_ != null else CanvasItem.TEXTURE_FILTER_PARENT_NODE
+	queue_redraw()
+
+func is_live() -> bool:
+	return live_renderer != null and frame != null and frame.valid
+
 func world_level_text() -> String:
-	return "%d-%d" % [1 + levels_cleared / LEVELS_PER_WORLD, 1 + levels_cleared % LEVELS_PER_WORLD]
+	if is_live():
+		return BattleCourse.text(frame.displayed_course) # the picture's level, which trails the session
+	return BattleCourse.text(levels_cleared)
 
 func _draw() -> void:
 	if _contestant == null:
 		return
 	var s := size.y / LOGICAL_HEIGHT
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2(s, s))
-	renderer.draw(self, _contestant, size / s)
+	var live := is_live()
+	var t0 := Time.get_ticks_usec()
+	if live:
+		live_renderer.draw(self, _contestant, size / s, frame)
+		stat_live_us += Time.get_ticks_usec() - t0
+		stat_live_draws += 1
+	else:
+		renderer.draw(self, _contestant, size / s)
+		stat_placeholder_us += Time.get_ticks_usec() - t0
+		stat_placeholder_draws += 1
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-	if ko:
+	# The frame border follows the session at once; the picture's KO marking waits for the
+	# death animation to finish.
+	var marked := ko and (not live or frame.ko_overlay)
+	if marked:
 		draw_rect(Rect2(Vector2.ZERO, size), Color(0.55, 0, 0, 0.7))
 		draw_line(Vector2.ZERO, size, Color.WHITE, 1.5)
 		draw_line(Vector2(size.x, 0), Vector2(0, size.y), Color.WHITE, 1.5)
 	draw_rect(Rect2(Vector2.ZERO, size), FRAME_KO if ko else FRAME_ALIVE, false, 1.0)
 	if font != null:
 		_text("%02d" % contestant_id, Vector2(1, 1), 0.6)
-		if not ko:
+		if not marked:
 			_text(world_level_text(), Vector2(1, size.y - 6), 0.6)
 
 # The bitmap font draws its glyph box ~15px above the baseline we give it (at scale 1).

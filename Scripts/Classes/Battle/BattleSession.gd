@@ -8,6 +8,9 @@ extends RefCounted
 ## later be applied to it without changing who owns it).
 
 enum KoCause {NONE, HAZARD, TIME, FORFEIT}
+## Things that happened to a contestant. Derived from state changes only (never from the rng),
+## so recording them cannot change a match. Used by the opponent previews to stage outcomes.
+enum EventType {HIT, POWER_UP, LEVEL_CLEAR, KO}
 
 const CONTESTANT_COUNT := 35
 const PLAYER_ID := 0
@@ -26,6 +29,9 @@ var finished := false
 var winner_id := -1
 var world := 1
 var level := 1
+## Append-only event log: {tick, id, type (EventType), a, b}.
+## HIT: a = new power. POWER_UP: a = new power. LEVEL_CLEAR: a = levels cleared. KO: a = KoCause.
+var events: Array[Dictionary] = []
 
 ## Creates a fresh match and makes it the current one. Nothing is inherited from before.
 static func begin(seed_value_: int) -> BattleSession:
@@ -70,7 +76,15 @@ func step() -> void:
 			continue
 		var cause := KoCause.NONE
 		if c.is_bot:
+			var power_before := c.power
+			var cleared_before := c.levels_cleared
 			cause = BattleBotSimulator.step_bot(c, tick_count, rng)
+			if c.power < power_before:
+				_log(EventType.HIT, c.id, c.power)
+			if c.levels_cleared > cleared_before:
+				_log(EventType.LEVEL_CLEAR, c.id, c.levels_cleared)
+			if c.power > power_before:
+				_log(EventType.POWER_UP, c.id, c.power)
 		else:
 			c.time_left -= 1
 			if c.time_left <= 0:
@@ -98,6 +112,7 @@ func report_level_complete() -> void:
 	if p.alive and not finished:
 		p.levels_cleared += 1
 		p.progress = 0.0
+		_log(EventType.LEVEL_CLEAR, PLAYER_ID, p.levels_cleared)
 
 ## KOs a contestant now. Ignored if they are already out or the match is over.
 func report_ko(id: int, cause: KoCause) -> void:
@@ -136,6 +151,7 @@ func _apply_kos(group: Array[BattleContestant]) -> void:
 		c.alive = false
 		c.ko_tick = tick_count
 		c.placement = best_place + i
+		_log(EventType.KO, c.id, c.ko_cause)
 	alive_count -= group.size()
 	if alive_count == 1:
 		for c in contestants:
@@ -144,6 +160,18 @@ func _apply_kos(group: Array[BattleContestant]) -> void:
 				_finish(c.id)
 	elif alive_count == 0:
 		_finish(group[0].id)
+
+func _log(type: EventType, id: int, a := 0, b := 0) -> void:
+	events.append({"tick": tick_count, "id": id, "type": type, "a": a, "b": b})
+
+## Everything that decides a match, as plain data (for determinism checks). Includes the rng
+## state, so any hidden extra rng use shows up.
+func snapshot() -> Dictionary:
+	var rows: Array = []
+	for c in contestants:
+		rows.append([c.alive, c.ko_tick, c.ko_cause, c.placement, c.levels_cleared, c.progress, c.power, c.time_left, c.skill, c.tiebreak])
+	return {"tick": tick_count, "alive": alive_count, "finished": finished, "winner": winner_id,
+		"rng_state": rng.state, "rows": rows}
 
 func _finish(winner: int) -> void:
 	finished = true
