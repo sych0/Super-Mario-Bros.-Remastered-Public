@@ -65,6 +65,9 @@ func verify_saves() -> void:
 			write_save(campaign, true)
 
 func write_save(campaign: String = Global.current_campaign, force := false) -> void:
+	# Battle never touches campaign progress.
+	if Global.current_game_mode == Global.GameMode.BATTLE:
+		return
 	if Global.debugged_in and not force:
 		return
 	var save = null

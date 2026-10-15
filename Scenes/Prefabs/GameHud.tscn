@@ -1,6 +1,7 @@
 [gd_scene format=3 uid="uid://bod0jkf7jc5pm"]
 
 [ext_resource type="Script" uid="uid://bjbd3a6su47si" path="res://Scripts/Classes/UI/GameHUD.gd" id="1_f34v2"]
+[ext_resource type="PackedScene" path="res://Scenes/Prefabs/UI/BattlePauseMenu.tscn" id="battle_pause"]
 [ext_resource type="Script" uid="uid://caq1qiwmy0mox" path="res://Scripts/Parts/BetterAnimatedSprite.gd" id="2_cbrve"]
 [ext_resource type="Texture2D" uid="uid://bf81l78knoaqd" path="res://Assets/Sprites/UI/CoinIcon.png" id="3_80r3s"]
 [ext_resource type="Script" uid="uid://cbal8ms2oe1ik" path="res://Scripts/Classes/Components/ResourceSetterNew.gd" id="3_jt73e"]
@@ -1066,6 +1067,9 @@ visible = false
 visible = false
 
 [node name="BooRacePause" parent="." unique_id=970848980 instance=ExtResource("7_35c0k")]
+visible = false
+
+[node name="BattlePause" parent="." instance=ExtResource("battle_pause")]
 visible = false
 
 [node name="MarathonResults" parent="." unique_id=941193886 instance=ExtResource("16_cfljn")]

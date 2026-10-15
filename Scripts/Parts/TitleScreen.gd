@@ -36,6 +36,9 @@ func _ready() -> void:
 	get_tree().paused = false
 	AudioManager.stop_all_music()
 	AudioManager.stop_music_override(AudioManager.MUSIC_OVERRIDES.NONE, true)
+	BattleSession.clear()
+	if Global.current_game_mode == Global.GameMode.BATTLE:
+		Global.current_game_mode = Global.GameMode.NONE
 	Global.reset_values()
 	Global.second_quest = false
 	SpeedrunHandler.timer = 0
@@ -228,6 +231,19 @@ func challenge_hunt_start() -> void:
 
 	LevelTransition.level_to_transition_to = Level.get_scene_string(Global.world_num, Global.level_num)
 	ChallengeModeHandler.current_run_red_coins_collected = 0
+	Global.transition_to_scene("res://Scenes/Levels/LevelTransition.tscn")
+
+func start_battle() -> void:
+	Global.current_game_mode = Global.GameMode.BATTLE
+	Global.current_campaign = "SMB1"
+	Global.second_quest = false
+	Global.clear_saved_values()
+	Global.world_num = 1
+	Global.level_num = 1
+	Global.reset_values()
+	BattleSession.begin(randi())
+	PipeCutscene.seen_cutscene = false
+	LevelTransition.level_to_transition_to = Level.get_scene_string(1, 1)
 	Global.transition_to_scene("res://Scenes/Levels/LevelTransition.tscn")
 
 func world_9_selected() -> void:

@@ -1344,6 +1344,9 @@ func death_load() -> void:
 			Level.start_level_path = Global.current_level.scene_file_path
 			Global.current_level.reload_level(),
 
+		Global.GameMode.BATTLE: func():
+			BattleHandler.end_match(),
+
 		"time_up": func():
 			Global.transition_to_scene("res://Scenes/Levels/TimeUp.tscn"),
 

@@ -95,6 +95,7 @@ func _enter_tree() -> void:
 	if can_set_time:
 		can_set_time = false
 		Global.time = time_limit
+	var fresh_level := first_load
 	if first_load:
 		start_level_path = scene_file_path
 		Global.can_time_tick = true
@@ -115,6 +116,8 @@ func _enter_tree() -> void:
 	first_load = false
 	if Global.connected_players > 1:
 		spawn_in_extra_players()
+	if Global.current_game_mode == Global.GameMode.BATTLE and BattleSession.current != null:
+		BattleHandler.attach_to(self, fresh_level)
 	Global.current_campaign = campaign
 	await get_tree().process_frame
 	AudioManager.stop_music_override(AudioManager.MUSIC_OVERRIDES.NONE, true)

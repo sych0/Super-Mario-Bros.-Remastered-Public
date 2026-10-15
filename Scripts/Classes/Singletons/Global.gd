@@ -190,9 +190,9 @@ var can_pause := true
 
 var fade_transition := false
 
-enum GameMode{NONE, CAMPAIGN, BOO_RACE, CHALLENGE, MARATHON, MARATHON_PRACTICE, LEVEL_EDITOR, CUSTOM_LEVEL, DISCO}
+enum GameMode{NONE, CAMPAIGN, BOO_RACE, CHALLENGE, MARATHON, MARATHON_PRACTICE, LEVEL_EDITOR, CUSTOM_LEVEL, DISCO, BATTLE}
 
-const game_mode_strings := ["Default", "Campaign", "BooRace", "Challenge", "Marathon", "MarathonPractice", "LevelEditor", "CustomLevel", "Disco"]
+const game_mode_strings := ["Default", "Campaign", "BooRace", "Challenge", "Marathon", "MarathonPractice", "LevelEditor", "CustomLevel", "Disco", "Battle"]
 
 var current_game_mode: GameMode = GameMode.NONE
 

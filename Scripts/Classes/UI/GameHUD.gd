@@ -220,6 +220,8 @@ func activate_pause_menu() -> void:
 			$MarathonPause.open()
 		Global.GameMode.MARATHON_PRACTICE:
 			$MarathonPause.open()
+		Global.GameMode.BATTLE:
+			$BattlePause.open()
 		_:
 			$StoryPause.open()
 
