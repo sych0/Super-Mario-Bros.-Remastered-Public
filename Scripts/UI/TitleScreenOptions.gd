@@ -8,11 +8,14 @@ extends VBoxContainer
 var selected_index := 0
 
 @export var options: Array[Label] = []
+## Optional: signal number emitted for each entry in `options` (same order). Empty = 1, 2, 3...
+@export var option_signal_numbers := PackedInt32Array()
 @onready var title_screen_parent := owner
 
 signal option_1_selected
 signal option_2_selected
 signal option_3_selected
+signal option_4_selected
 
 signal closed
 
@@ -52,4 +55,7 @@ func handle_inputs() -> void:
 
 func option_selected() -> void:
 	active = false
-	emit_signal("option_" + str(selected_index + 1) + "_selected")
+	var signal_number := selected_index + 1
+	if selected_index < option_signal_numbers.size():
+		signal_number = option_signal_numbers[selected_index]
+	emit_signal("option_" + str(signal_number) + "_selected")
