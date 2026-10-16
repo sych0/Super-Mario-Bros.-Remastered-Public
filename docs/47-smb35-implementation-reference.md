@@ -19,6 +19,9 @@ disagree about *what Battle should do*, nothing changes until Zack approves (eve
   committed, and it is never uploaded. Frame extraction for analysis stayed in local scratch or workspace
   folders outside the repository. Nothing in this document reproduces imagery or audio: it records only
   measurements, timings, counts and short descriptions.
+  *(Update: the video is public, `https://www.youtube.com/watch?v=AUcFTEfFp58`; for that video alone, frames and short contact
+  sheets may be viewed when building the Battle UI, and the video is still never committed or redistributed. This does not
+  extend to any ROM or ROM-derived asset. See `tools/reference/README.md`.)*
 * The video has two complete matches, both won by the recording player:
   * **Match 1 (M1)**: a time-limited *Special Battle* event (34 players, starts on 1-2). Match start at about t=20 s,
     GO at t≈25 s, won at t≈412 s.

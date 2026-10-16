@@ -13,6 +13,10 @@ The brief asks for frame-level measurement of `reference.mp4`. **That file was n
 
 So the answers to "what exactly does SMB35 do" below are labelled **doc 47** (video-derived, not re-measured), **ours** (a stated default) or **unresolved**.
 
+### 0.1 Follow-up: the video became public, and the cloud container still could not reach it
+
+The reference video is public (`https://www.youtube.com/watch?v=AUcFTEfFp58`), and for **that video only** the "no frame may enter model context" rule is lifted (frames and short contact sheets may be viewed; the video itself is never committed or redistributed; nothing changes for any ROM or ROM-derived asset). The session that was asked to re-inspect the send at the listed timestamps ran in the same kind of cloud container, and **that container's network policy refuses `www.youtube.com` (and `youtu.be`, `*.googlevideo.com`, `i.ytimg.com`)**: `yt-dlp` installs, but its first request is a 403 from the egress proxy (`connect_rejected`). There is no local copy of the video in the container either. So **no frame was viewed, nothing in section 3's "ours" column was re-checked, and no value in `BattleSendStyle` was changed** — a guess corrected by another guess would only make the doc dishonest. The corrections wait for one of: the host allowed in the environment's network settings (`www.youtube.com` plus `*.googlevideo.com` for the stream), or Zack running `tools/reference/extract_frames.py` on the local copy and attaching the sheets it writes (it makes labelled contact sheets for exactly the windows listed in section 11; frames stay outside the repository).
+
 ## 1. Part A — the results panes
 
 **Symptom (Zack):** opponent panes look right while playing, and go wrong on entering ROUND_OVER / RESULTS: cream, blank-looking cells with isolated sprites.
@@ -121,7 +125,7 @@ New or rewritten checks: the whole results field held across ROUND_OVER → RESU
 
 ## 11. For Zack: what to compare, and what to measure (timestamps are doc 47's)
 
-Compare by eye in `reference.mp4`:
+Compare by eye in the reference video (`python3 tools/reference/extract_frames.py reference.mp4 --preset all` writes labelled sheets for every window below):
 
 * **Sends** (leave → land): 515.8 → 516.1 (L22), 526.7 → 526.9 (R51), 527.6 → 527.9 (L12), 528.5 → 528.7 (L52); the bracket at the window centre at t = 515.8, 527.6, 536.7, 537.6, 548.7, 561.9, 607.7, 618.7; the off-centre samples are in the same 509–623 range.
 * **Re-target sweep after a KO:** 163.60 – 163.70 (R10 → R11 → R12).

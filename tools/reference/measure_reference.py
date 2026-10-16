@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Local measurement of the SMB35 reference video, for the Battle UI milestones (doc 51).
 
-reference.mp4 must stay on this machine. This tool decodes it with a local ffmpeg pipe, one frame at a time, and prints or
-writes DERIVED NUMBERS ONLY: timestamps, pixel coordinates, boxes, colours of single pixels, durations, counts, speeds. It never
-saves, copies, displays or sends a frame (nothing is written to disk but the JSON/CSV you ask for), and it has no network code.
+The video is never committed or redistributed (the public SMB35 video's frames may be looked at: see extract_frames.py). This tool
+decodes it with a local ffmpeg pipe, one frame at a time, and prints or writes DERIVED NUMBERS ONLY: timestamps, pixel coordinates,
+boxes, colours of single pixels, durations, counts, speeds. It never saves, copies, displays or sends a frame (nothing is written to
+disk but the JSON/CSV you ask for), and it has no network code.
 
 Needs: python3, numpy, ffmpeg + ffprobe on the PATH.
 
