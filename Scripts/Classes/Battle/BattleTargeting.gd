@@ -3,10 +3,12 @@ extends RefCounted
 ## Who an attack goes to. The attack system only ever asks `choose()`, so a later targeting mode
 ## (attackers, most coins, lowest time, a manual choice...) is another subclass of this class and
 ## nothing in sending, queues or delivery changes. The policy is given the session's authoritative
-## state to read and the attack system's own random stream; it must not change either.
+## state to read and ONE uniform draw in [0, 1) that the attack system took from the sender's own
+## random stream (the real player's stream, or the bots'), so a policy owns no randomness itself:
+## it is a pure function of the state and that draw, and it must not change either.
 
 ## The contestant id `sender`'s attack goes to, or -1 if nobody can be targeted.
-func choose(_session: BattleSession, _sender: int, _rng: RandomNumberGenerator) -> int:
+func choose(_session: BattleSession, _sender: int, _draw: float) -> int:
 	return -1
 
 ## Contestants that may be targeted by `sender`: alive and not the sender, in ascending id order

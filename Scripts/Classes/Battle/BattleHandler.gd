@@ -37,6 +37,7 @@ static func sim_speed() -> int:
 	return _sim_speed
 
 var fresh_level := false
+var bound_session: BattleSession = null ## the session this level belongs to, kept so its cleanup never reaches a later round's session
 var accumulator := 0.0
 var level_completed := false
 var time_up_wait := 0.0 ## real seconds until the next "time up" is sent (only once the player is out of time)
@@ -58,9 +59,16 @@ func _ready() -> void:
 	if session == null:
 		queue_free()
 		return
+	bound_session = session
 	if fresh_level:
 		session.report_level_start(Global.world_num, Global.level_num)
 	Global.level_complete_begin.connect(_on_level_complete)
+
+## The level is going away (cleared, replaced, or the round restarting): whatever was ACTIVE against
+## the real player in it is over. Their QUEUED enemies have not reached a level yet and stay queued.
+func _exit_tree() -> void:
+	if bound_session != null:
+		bound_session.resolve_player_active(BattleAttack.Resolution.LEVEL_TRANSITION)
 
 func _on_level_complete() -> void:
 	if level_completed or BattleSession.current == null:

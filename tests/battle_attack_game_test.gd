@@ -1,8 +1,10 @@
 extends SceneTree
 ## The real game's side of the Battle attack loop: the real player defeating real enemies inside
-## Battle (stomp, kick/fire/star kill, hammer, a Koopa stomped into its shell), exactly-once
-## reporting, no reporting outside Battle, attacks aimed at the real player being recorded but never
-## spawned into the level, and attack state not surviving into the next round.
+## Battle (stomp, kick/fire/star kill, hammer, a Koopa stomped into its shell), who each kill is
+## attributed to (only the real player's sends anything), exactly-once reporting, no reporting
+## outside Battle, attacks aimed at the real player staying active until the game resolves them
+## (never spawned into the level), the cleanup at a level transition and at the end of a round, and
+## attack state not surviving into the next round.
 ##   godot --headless --fixed-fps 60 --path . -s tests/battle_attack_game_test.gd
 ## Script classes that mention autoloads are only reached through load() (a `-s` script is compiled
 ## before the autoloads exist).
@@ -13,9 +15,15 @@ const GOOMBA_SCRIPT := "res://Scripts/Classes/Entities/Enemies/Goomba.gd"
 const KOOPA_SCRIPT := "res://Scripts/Classes/Entities/Enemies/KoopaTroopa.gd"
 const SHELL_SCRIPT := "res://Scripts/Classes/Entities/ShellClass.gd"
 const KOOPA_PREFAB := "res://Scenes/Prefabs/Entities/Enemies/GreenKoopaTroopa.tscn"
+const GOOMBA_PREFAB := "res://Scenes/Prefabs/Entities/Enemies/Goomba.tscn"
+const SHELL_PREFAB := "res://Scenes/Prefabs/Entities/Objects/GreenKoopaShell.tscn"
+const SPIKE_PREFAB := "res://Scenes/Prefabs/Entities/SpikeBall.tscn"
+const ICICLE_PREFAB := "res://Scenes/Prefabs/Entities/Enemies/Icicle.tscn"
+const FIREBALL_PREFAB := "res://Scenes/Prefabs/Entities/Items/Fireball.tscn"
+const BRICK_PREFAB := "res://Scenes/Prefabs/Blocks/BrickBlocks/BrickBlock.tscn"
 const FIXED_SOURCE := """extends "res://Scripts/Classes/Battle/BattleTargeting.gd"
 var target := 0
-func choose(_session, _sender, _rng) -> int:
+func choose(_session, _sender, _draw) -> int:
 	return target
 """
 
@@ -27,6 +35,9 @@ var SESSION
 var ROUND
 var TYPES
 var LV
+var AT # BattleAttribution
+var SRC # BattleAttribution.Source
+var RES # BattleAttack.Resolution
 var FixedPolicy
 
 func check(cond: bool, msg: String) -> void:
@@ -72,6 +83,13 @@ func enemies(script_path: String) -> Array:
 	out.sort_custom(func(a, b): return a.global_position.x < b.global_position.x)
 	return out
 
+## A bot that is still in the round (the simulated bots drop out as the test runs).
+func alive_bot(skip := 0) -> int:
+	for id in range(1 + skip, 35):
+		if session().contestants[id].alive:
+			return id
+	return -1
+
 func sent() -> int:
 	return session().attacks.history.size()
 
@@ -87,6 +105,9 @@ func _run() -> void:
 	ROUND = load("res://Scripts/Classes/Battle/BattleRound.gd")
 	TYPES = load("res://Scripts/Classes/Battle/BattleEnemyType.gd")
 	LV = load("res://Scripts/Classes/LevelClass.gd")
+	AT = load("res://Scripts/Classes/Battle/BattleAttribution.gd")
+	SRC = AT.Source
+	RES = load("res://Scripts/Classes/Battle/BattleAttack.gd").Resolution
 	FixedPolicy = GDScript.new()
 	FixedPolicy.source_code = FIXED_SOURCE
 	FixedPolicy.reload()
@@ -97,7 +118,7 @@ func _run() -> void:
 
 	await start_battle()
 	await test_player_defeats()
-	await test_incoming_to_player_not_spawned()
+	await test_incoming_to_player()
 	await test_round_isolation()
 	await test_classic()
 
@@ -139,59 +160,189 @@ func test_player_defeats() -> void:
 	var a: Dictionary = session().attacks.attack_history()[0]
 	check(a.sender == 0 and a.kind == TYPES.Kind.GOOMBA and a.target >= 1 and a.state == 0 and a.sent_tick == session().tick_count, "...from the player, a GOOMBA, to an opponent, QUEUED (%s)" % str(a))
 	var ev: Array = session().events.filter(func(e): return e.type == SESSION.EventType.ENEMY_DEFEATED)
-	check(ev.size() == 1 and ev[0].id == 0 and ev[0].a == TYPES.Kind.GOOMBA, "an ENEMY_DEFEATED event records it")
+	check(ev.size() == 1 and ev[0].id == 0 and ev[0].a == TYPES.Kind.GOOMBA and ev[0].defeat == 0, "an ENEMY_DEFEATED event records it (defeat 0)")
 	# exactly once
-	goombas[0].report_battle_defeat()
-	goombas[0].report_battle_defeat()
+	goombas[0].report_battle_defeat(p)
+	goombas[0].report_battle_defeat(p)
 	await frames(10)
-	check(sent() == 1 and session().attacks.defeats == 1, "the same enemy reports once, however often its death code runs")
-	# kicked / burned / star-struck: the shared base-class death
+	check(sent() == 1 and session().attacks.defeats == 1 and session().attacks.defeat_sources == {SRC.PLAYER: 1}, "the same enemy reports once, however often its death code runs")
+	# kicked / burned / star-struck: the shared base-class death, with the player as the cause
 	goombas[1].die_from_object(p)
-	check(sent() == 2, "an object kill (shell, fireball, star) creates a send")
+	check(sent() == 2, "an object kill by the player (star) creates a send")
 	goombas[1].die_from_object(p)
 	goombas[1].die()
 	check(sent() == 2, "...and a second death call on the same Goomba does not")
 	goombas[2].die_from_hammer(p)
 	check(sent() == 3, "a hammer kill creates a send")
 	goombas[3].damage(p)
-	check(sent() == 4, "a fireball-style hit that kills creates a send")
+	check(sent() == 4, "a hit by the player that kills creates a send")
 	goombas[4].die()
-	check(sent() == 5, "the plain die() path creates a send")
+	check(sent() == 4 and session().attacks.defeat_sources.get(SRC.UNKNOWN, 0) == 1, "the plain die() path says nothing about who killed it: UNKNOWN, no send")
 	# a Koopa stomped into its shell
 	var koopa = koopas[0]
 	koopa.stomped_on(p)
 	await frames(5)
-	check(sent() == 6 and session().attacks.attack_history()[5].kind == TYPES.Kind.KOOPA, "stomping a Koopa into its shell creates one KOOPA send")
+	check(sent() == 5 and session().attacks.attack_history()[4].kind == TYPES.Kind.KOOPA, "stomping a Koopa into its shell creates one KOOPA send")
 	var shells := enemies(SHELL_SCRIPT)
 	check(shells.size() >= 1, "(the Koopa left a shell behind)")
 	if shells.size() > 0:
 		var shell = shells[0]
 		check(shell.old_entity != null and not shell.old_entity._battle_defeat_reported, "the Koopa that will wake up from the shell has not been counted as defeated")
 		shell.die_from_object(p)
-		check(sent() == 6, "killing the shell is not another send (a shell is not a supported enemy)")
-	# a Koopa bumped from below
-	var bumped = load(KOOPA_PREFAB).instantiate()
-	G.current_level.add_child(bumped)
-	bumped.global_position = p.global_position + Vector2(40, 0)
-	await frames(3)
-	bumped.block_bounced()
-	await frames(3)
-	check(sent() == 7 and session().attacks.attack_history()[6].kind == TYPES.Kind.KOOPA, "a Koopa knocked into its shell from below creates a send")
+		check(sent() == 5, "killing the shell is not another send (a shell is not a supported enemy)")
 	# every send went out as an event pair, in order
 	var all_sent: Array = session().events.filter(func(e): return e.type == SESSION.EventType.SENT)
-	check(all_sent.size() == 7 and all_sent.map(func(e): return e.a) == [0, 1, 2, 3, 4, 5, 6] and all_sent.all(func(e): return e.id == 0 and e.b != 0), "seven SENT events, in order, all from the player and none to the player themself")
+	check(all_sent.size() == 5 and all_sent.map(func(e): return e.a) == [0, 1, 2, 3, 4] and all_sent.all(func(e): return e.id == 0 and e.b != 0), "five SENT events, in order, all from the player and none to the player themself")
+	await test_attribution_matrix()
 	# the player dies: no more sends
+	var total := sent()
 	var more := enemies(GOOMBA_SCRIPT)
 	p.die()
 	check(not session().get_player().alive, "the player has died")
 	if more.size() > 0:
 		more[0].die_from_object(p)
-	check(sent() == 7, "an enemy defeated after the player's death sends nothing")
+	check(sent() == total, "an enemy defeated after the player's death sends nothing")
 	await wait_until(func(): return rnd().state == ROUND.State.RESULTS, 1500)
+
+# ---- who each kill is attributed to ----------------------------------------------------------------------------
+
+var spawned := 0
+
+## A level object parked far from the action with its processing off, so only the calls a test makes
+## happen. Every one gets its own position before it enters the level: the level's persistence frees an
+## entity whose scene and position match one that was already defeated.
+func spawn(prefab: String) -> Node2D:
+	var n: Node2D = load(prefab).instantiate()
+	spawned += 1
+	n.position = Vector2(12000 + 24 * spawned, -600)
+	G.current_level.add_child(n)
+	n.process_mode = Node.PROCESS_MODE_DISABLED
+	return n
+
+func goomba() -> Node2D:
+	return spawn(GOOMBA_PREFAB)
+
+## `action` kills (or tries to kill) an enemy; it must count as `source`, and send an enemy only if `send`.
+func expect(label: String, source: int, send: bool, action: Callable) -> void:
+	var s = session()
+	var before := sent()
+	var defeats_before: int = s.attacks.defeats
+	var counted_before: int = int(s.attacks.defeat_sources.get(source, 0))
+	await action.call()
+	await frames(4)
+	var grew := sent() - before
+	var counted: int = int(s.attacks.defeat_sources.get(source, 0)) - counted_before
+	check(grew == (1 if send else 0) and counted == 1 and s.attacks.defeats - defeats_before == grew, "%s -> %s, %s" % [label, AT.name_of(source), "sends an enemy" if send else "sends nothing"])
+
+func test_attribution_matrix() -> void:
+	print("-- kill attribution on the real kill paths")
+	var p := player()
+	var block := spawn(BRICK_PREFAB)
+	var other_block := spawn(BRICK_PREFAB)
+	AT.tag_block_bump(block, p) # as Player.handle_block_collision_detection does when it bumps one from below
+	var made: Array = [block, other_block]
+	# --- the real player
+	var g := goomba()
+	await expect("stomping a Goomba", SRC.PLAYER, true, func(): g.stomped_on(p))
+	g = goomba()
+	await expect("a star-powered touch (die_from_object by the player)", SRC.PLAYER, true, func(): g.die_from_object(p))
+	g = goomba()
+	await expect("the hammer", SRC.PLAYER, true, func(): g.die_from_hammer(p))
+	g = goomba()
+	var fireball := spawn(FIREBALL_PREFAB)
+	fireball.set_meta("IsPlayerProjectile", "true") # exactly what Player.throw_projectile adds
+	fireball.is_friendly = true
+	made.append(fireball)
+	await expect("the player's fireball (through the Goomba's FireballDetection)", SRC.PLAYER, true, func(): g.get_node("FireballDetection").fireball_hit.emit(fireball))
+	g = goomba()
+	var shell := spawn(SHELL_PREFAB)
+	made.append(shell)
+	await frames(8)
+	shell.on_player_stomped_on(p) # the player kicks it: the shell now knows who
+	await expect("a shell the player kicked", SRC.PLAYER, true, func(): g.get_node("ShellDetection").moving_shell_entered.emit(shell))
+	g = goomba()
+	await expect("a block the player bumped from below", SRC.PLAYER, true, func(): g.get_node("BlockBouncingDetection").block_bounced.emit(block))
+	var k := spawn(KOOPA_PREFAB)
+	await expect("stomping a Koopa", SRC.PLAYER, true, func(): k.stomped_on(p))
+	k = spawn(KOOPA_PREFAB)
+	k.get_node("BlockBouncingDetection").last_block = block
+	AT.tag_block_bump(block, p) # a bump only counts for half a second: bump it again
+	await expect("a Koopa bounced off a block the player bumped", SRC.PLAYER, true, func(): k.block_bounced())
+	check(session().attacks.attack_history().slice(-2).all(func(d): return d.kind == TYPES.Kind.KOOPA), "(the last two sends were KOOPAs)")
+	# --- not the player
+	g = goomba()
+	var killer := goomba()
+	made.append(killer)
+	await expect("another enemy", SRC.ENEMY, false, func(): g.die_from_object(killer))
+	g = goomba()
+	var spike := spawn(SPIKE_PREFAB)
+	made.append(spike)
+	await expect("a spike ball", SRC.ENVIRONMENT, false, func(): g.die_from_object(spike))
+	g = goomba()
+	var icicle := spawn(ICICLE_PREFAB)
+	made.append(icicle)
+	await expect("a falling icicle (through the Goomba's IcicleDetection)", SRC.ENVIRONMENT, false, func(): g.get_node("IcicleDetection").icicle_detected.emit(icicle))
+	g = goomba()
+	await expect("nothing known (die)", SRC.UNKNOWN, false, func(): g.die())
+	g = goomba()
+	var rock := Node2D.new()
+	G.current_level.add_child(rock)
+	rock.position = Vector2(11000, -600)
+	made.append(rock)
+	await expect("an object nobody knows", SRC.UNKNOWN, false, func(): g.die_from_object(rock))
+	g = goomba()
+	var enemy_fireball := spawn(FIREBALL_PREFAB)
+	made.append(enemy_fireball)
+	await expect("a projectile that is not the player's (it is an enemy's)", SRC.ENEMY, false, func(): g.get_node("FireballDetection").fireball_hit.emit(enemy_fireball))
+	g = goomba()
+	var loose_shell := spawn(SHELL_PREFAB)
+	made.append(loose_shell)
+	await expect("a shell nobody kicked", SRC.UNKNOWN, false, func(): g.get_node("ShellDetection").moving_shell_entered.emit(loose_shell))
+	g = goomba()
+	await expect("a block nobody was seen bumping", SRC.UNKNOWN, false, func(): g.get_node("BlockBouncingDetection").block_bounced.emit(other_block))
+	k = spawn(KOOPA_PREFAB)
+	k.get_node("BlockBouncingDetection").last_block = other_block
+	await expect("a Koopa bounced off a block nobody bumped", SRC.UNKNOWN, false, func(): k.block_bounced())
+	k = spawn(KOOPA_PREFAB)
+	await expect("a Koopa bounced with no block known", SRC.UNKNOWN, false, func(): k.block_bounced())
+	k = spawn(KOOPA_PREFAB)
+	await expect("a Koopa killed by another enemy", SRC.ENEMY, false, func(): k.die_from_object(killer))
+	# the player's side of a block bump: it tags the block just before it tells it it was hit, in Battle only
+	var player_src := FileAccess.get_file_as_string("res://Scripts/Classes/Entities/Player.gd")
+	var fn_at := player_src.find("func handle_block_collision_detection()")
+	var body := player_src.substr(fn_at, player_src.find("\nfunc ", fn_at + 10) - fn_at)
+	var tag_at := body.find("BattleAttribution.tag_block_bump(i, self)")
+	check(tag_at > 0 and tag_at < body.find("player_block_hit.emit(self)") and body.substr(0, tag_at).contains("GameMode.BATTLE"), "Player.handle_block_collision_detection tags the block (Battle only) before it emits player_block_hit")
+	# an old bump no longer counts
+	g = goomba()
+	block.set_meta(AT.BUMP_META, [p, Engine.get_physics_frames() - AT.BUMP_FRAMES - 5])
+	await expect("a block the player bumped a while ago", SRC.UNKNOWN, false, func(): g.get_node("BlockBouncingDetection").block_bounced.emit(block))
+	# one defeat, one report: the first report wins, whatever follows
+	g = goomba()
+	var counted_before: int = session().attacks.defeats
+	var sent_before := sent()
+	g.die()
+	g.stomped_on(p)
+	g.die_from_object(p)
+	await frames(4)
+	check(sent() == sent_before and session().attacks.defeats == counted_before, "an enemy first killed with no known cause cannot then be claimed by the player: one defeat is one report")
+	g = goomba()
+	sent_before = sent()
+	g.stomped_on(p)
+	g.die()
+	g.die_from_hammer(p)
+	g.damage(p)
+	await frames(4)
+	check(sent() == sent_before + 1, "an enemy the player stomped sends exactly one enemy however many death paths then run")
+	check(session().get_incoming(0).is_empty() or session().get_incoming(0).all(func(d): return d.sender != 0), "(nothing the player defeated was sent to the player)")
+	for n in made:
+		if is_instance_valid(n):
+			n.queue_free()
+	await frames(3)
 
 # ---- attacks aimed at the real player ----------------------------------------------------------------------------
 
-func test_incoming_to_player_not_spawned() -> void:
+func test_incoming_to_player() -> void:
 	print("-- incoming attacks on the real player")
 	await wait_until(func(): return rnd().state == ROUND.State.RESULTS, 1500)
 	rnd().time_in_state = ROUND.RESULTS_MAX_SECONDS
@@ -203,19 +354,44 @@ func test_incoming_to_player_not_spawned() -> void:
 	fixed.target = 0
 	s.attacks.targeting = fixed
 	var enemy_count := get_nodes_in_group("Enemies").size()
-	var nodes_before := int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT))
 	var power_before: String = player().power_state.name if player().get("power_state") != null else ""
 	for i in 3:
-		s.report_enemy_defeat(4 + i, TYPES.Kind.KOOPA)
+		s.report_enemy_defeat(alive_bot(i), TYPES.Kind.KOOPA)
 	check(s.get_incoming(0).size() == 3, "three attacks are recorded in the real player's queue")
-	await frames(60 * 12) # twelve Battle seconds: they activate (3 s delay) and resolve (7 s active)
-	var states := {}
-	for d in s.attacks.attack_history():
-		states[d.state] = true
-	check(states.has(2) and s.get_incoming(0).is_empty(), "...they activated and resolved in session state (%s)" % str(states.keys()))
+	await frames(60 * 12) # twelve Battle seconds: they activate after 3, and the longest bot timer is 7
+	var inc: Array = s.get_incoming(0)
+	check(inc.size() == 3 and inc.all(func(d): return d.state == 1), "they are ACTIVE and still ACTIVE twelve seconds later: no timer resolves an attack on the real player")
+	check(s.events.filter(func(e): return e.type == SESSION.EventType.INCOMING_RESOLVED).is_empty(), "...and nothing was resolved")
 	check(get_nodes_in_group("Enemies").size() == enemy_count, "no enemy was spawned into the player's level (%d enemies before and after)" % enemy_count)
-	check(not player().is_dead and session().get_player().alive and (player().power_state.name if player().get("power_state") != null else "") == power_before, "the real player was not hurt, shrunk or killed by them")
-	check(session().events.filter(func(e): return e.type == SESSION.EventType.INCOMING_ACTIVATED and e.id == 0).size() == 3, "INCOMING_ACTIVATED was logged for each, for a future UI")
+	check(not player().is_dead and s.get_player().alive and (player().power_state.name if player().get("power_state") != null else "") == power_before, "the real player was not hurt, shrunk or killed by them")
+	check(s.events.filter(func(e): return e.type == SESSION.EventType.INCOMING_ACTIVATED and e.id == 0).size() == 3, "INCOMING_ACTIVATED was logged for each, for a future UI")
+	# a fourth waits for a free slot
+	var fourth = s.report_enemy_defeat(alive_bot(), TYPES.Kind.GOOMBA)
+	await frames(60 * 4)
+	check(fourth.state == 0, "a fourth attack waits QUEUED while three are active")
+	# the game resolves one by its sequence id
+	var first: int = inc[0].seq
+	check(s.resolve_player_incoming(first, RES.DEFEATED_BY_PLAYER), "the game resolves one specific attack by its id")
+	check(not s.resolve_player_incoming(first, RES.DEFEATED_BY_PLAYER), "a duplicate report is refused")
+	await frames(60 * 2)
+	check(fourth.state == 1 and s.attacks.history[first].resolution == RES.DEFEATED_BY_PLAYER, "the freed slot lets the waiting attack in, and the resolved one keeps its cause")
+	# leaving the level (the BattleHandler going away with it) ends what was active in it
+	var handler = G.current_level.get_node("BattleHandler")
+	var active_ids: Array = s.get_incoming(0).filter(func(d): return d.state == 1).map(func(d): return d.seq)
+	handler.get_parent().remove_child(handler)
+	handler.queue_free()
+	check(active_ids.size() == 3 and active_ids.all(func(q): return s.attacks.history[q].resolution == RES.LEVEL_TRANSITION) and s.get_incoming(0).is_empty(), "a level transition resolves what was ACTIVE against the player as LEVEL_TRANSITION (%d)" % active_ids.size())
+	# the round ends (the player wins): whatever is left is closed with ROUND_ENDED
+	var late_a = s.report_enemy_defeat(alive_bot(), TYPES.Kind.KOOPA)
+	var late_b = s.report_enemy_defeat(alive_bot(1), TYPES.Kind.GOOMBA)
+	for id in range(1, 35):
+		s.report_ko(id, SESSION.KoCause.HAZARD)
+	check(s.finished and s.winner_id == 0 and late_a.resolution == RES.ROUND_ENDED and late_b.resolution == RES.ROUND_ENDED, "when the round ends, attacks still aimed at the player end with ROUND_ENDED")
+	check(s.attacks.history.all(func(d): return d.state == 2 and d.resolution != RES.NONE) and s.attacks.round_ended, "...and nothing in the round is left unresolved")
+	await wait_until(func(): return rnd().state == ROUND.State.RESULTS, 1500)
+	rnd().time_in_state = ROUND.RESULTS_MAX_SECONDS
+	await wait_until(func(): return level_running() and rnd().state == ROUND.State.PLAYING and rnd().round_number >= 3, 1800)
+	await frames(5)
 
 # ---- the next round starts clean -----------------------------------------------------------------------------------
 
@@ -226,8 +402,16 @@ func test_round_isolation() -> void:
 	old.report_enemy_defeat(0, TYPES.Kind.GOOMBA)
 	var old_seed: int = old.seed_value
 	check(old.attacks.history.size() >= 1 and old.attacks.next_seq >= 1 and not old.events.is_empty(), "this round has attack state")
+	var fixed = FixedPolicy.new()
+	fixed.target = 0
+	old.attacks.targeting = fixed
+	old.attacks.bots_send = false
+	var aimed = old.report_enemy_defeat(alive_bot(), TYPES.Kind.KOOPA)
+	await frames(60 * 4)
+	check(aimed.state == 1, "(an attack is ACTIVE against the player when they die)")
 	player().die()
 	await wait_until(func(): return rnd().state == ROUND.State.RESULTS, 1500)
+	check(aimed.resolution == RES.TARGET_OUT and old.attacks.history.all(func(d): return d.state == 2) and old.finished, "the player's death resolves what was active against them (TARGET_OUT) and the round finishes with nothing unresolved")
 	rnd().time_in_state = ROUND.RESULTS_MAX_SECONDS
 	await wait_until(func(): return level_running() and rnd().state == ROUND.State.PLAYING and session() != old, 1800)
 	await frames(3)

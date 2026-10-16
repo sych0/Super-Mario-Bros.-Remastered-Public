@@ -71,17 +71,19 @@ func stomped_on(player: Player) -> void:
 		return
 	dead = true
 	await get_tree().physics_frame
-	summon_shell(not is_on_floor(), false)
+	summon_shell(not is_on_floor(), false, player)
 	queue_free()
 
 func block_bounced() -> void:
-	summon_shell(true, true)
+	summon_shell(true, true, $BlockBouncingDetection.last_block)
 	queue_free()
 
-func summon_shell(flipped := false, launch := false) -> void:
+## `cause` is what turned the Koopa into a shell (the stomping Player, the bouncing Block); Battle uses it
+## to decide who the Koopa's defeat counts as.
+func summon_shell(flipped := false, launch := false, cause = null) -> void:
 	if is_queued_for_deletion():
 		return
-	report_battle_defeat() # stomped or bumped from below: the Koopa is out of the fight (its shell is not a new enemy)
+	report_battle_defeat(cause) # stomped or bumped from below: the Koopa is out of the fight (its shell is not a new enemy)
 	DiscoLevel.combo_amount += 1
 	var shell = load(shell_scene).instantiate()
 	%SpriteSetter.copy_meta(shell.get_node("%ResourceSetter"))

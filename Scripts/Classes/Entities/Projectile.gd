@@ -153,5 +153,7 @@ func summon_extra_projectile() -> void:
 		node.global_position = global_position + EXTRA_PROJECTILE_OFFSET
 		if node is Projectile:
 			node.is_friendly = is_friendly
+			if has_meta("IsPlayerProjectile"):
+				node.set_meta("IsPlayerProjectile", get_meta("IsPlayerProjectile")) # a child of the player's projectile is the player's too
 			node.HAS_COLLISION = HAS_COLLISION
 		add_sibling(node)

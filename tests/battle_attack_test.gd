@@ -13,12 +13,24 @@ var SYS # BattleAttackSystem
 var BOT # BattleBotSimulator
 var Policy # BattleTargeting
 var FixedPolicy # a test policy that always picks one contestant
+var RecordPolicy # a test policy that records the draw it is handed
 var K # BattleSession.KoCause
 var E # BattleSession.EventType
+var R # BattleAttack.Resolution
+var AT # BattleAttribution
+var SRC # BattleAttribution.Source
+
+const RECORD_SOURCE := """extends "res://Scripts/Classes/Battle/BattleTargeting.gd"
+var draws: Array = []
+func choose(session, sender, draw) -> int:
+	if sender == 0:
+		draws.append(draw) # only the real player's picks
+	return load("res://Scripts/Classes/Battle/BattleTargeting.gd").eligible(session, sender)[0]
+"""
 
 const FIXED_SOURCE := """extends "res://Scripts/Classes/Battle/BattleTargeting.gd"
 var target := 0
-func choose(_session, _sender, _rng) -> int:
+func choose(_session, _sender, _draw) -> int:
 	return target
 """
 
@@ -39,8 +51,14 @@ func _initialize() -> void:
 	FixedPolicy = GDScript.new()
 	FixedPolicy.source_code = FIXED_SOURCE
 	FixedPolicy.reload()
+	RecordPolicy = GDScript.new()
+	RecordPolicy.source_code = RECORD_SOURCE
+	RecordPolicy.reload()
 	K = S.KoCause
 	E = S.EventType
+	R = A.Resolution
+	AT = load("res://Scripts/Classes/Battle/BattleAttribution.gd")
+	SRC = AT.Source
 	S.default_attacks_enabled = true
 	test_enemy_types()
 	test_player_defeat_creates_one_send()
@@ -52,6 +70,10 @@ func _initialize() -> void:
 	test_pressure_raises_bot_elimination()
 	test_bot_sends()
 	test_player_incoming()
+	test_rng_streams()
+	test_player_incoming_resolution()
+	test_round_cleanup()
+	test_attribution_model()
 	test_senders_out()
 	test_enabled_disabled()
 	test_round_isolation()
@@ -109,11 +131,13 @@ func test_player_defeat_creates_one_send() -> void:
 	check(d[0].id == 0 and d[0].a == T.Kind.GOOMBA and d[0].b == attack.seq, "ENEMY_DEFEATED: the defeater, the kind and the attack's seq")
 	check(sent[0].id == 0 and sent[0].a == attack.seq and sent[0].b == attack.target and sent[0].kind == T.Kind.GOOMBA, "SENT: sender, seq, target and kind")
 	check(got[0].id == attack.target and got[0].a == attack.seq and got[0].b == 0 and got[0].kind == T.Kind.GOOMBA, "RECEIVED: the same send from the target's side")
-	check(s.report_player_defeat("res://Scripts/Classes/Entities/ShellClass.gd") == null and s.attacks.history.size() == 1, "an unsupported enemy sends nothing")
-	check(S.report_player_defeat("") == null, "(no current session: nothing happens)")
+	check(d[0].defeat == 0 and attack.defeat_seq == 0, "...numbered as the round's first defeat")
+	S.clear()
+	check(S.report_enemy_kill("res://Scripts/Classes/Entities/Enemies/Goomba.gd", SRC.PLAYER) == null, "(no current session: nothing happens)")
 	S.begin(9)
 	S.current.attacks.bots_send = false
-	var via_game_path = S.report_player_defeat("res://Scripts/Classes/Entities/Enemies/KoopaTroopa.gd")
+	check(S.report_enemy_kill("res://Scripts/Classes/Entities/ShellClass.gd", SRC.PLAYER) == null and S.current.attacks.history.is_empty(), "an unsupported enemy sends nothing, even when the player killed it")
+	var via_game_path = S.report_enemy_kill("res://Scripts/Classes/Entities/Enemies/KoopaTroopa.gd", SRC.PLAYER)
 	check(via_game_path != null and via_game_path.sender == 0 and via_game_path.kind == T.Kind.KOOPA, "the game's entry point turns a script path into a KOOPA send by the player")
 	S.clear()
 
@@ -228,7 +252,7 @@ func test_lifecycle() -> void:
 	var k_end: int = k.activated_tick + T.active_ticks(T.Kind.KOOPA)
 	check(by_tick[g_end - 1][1] == A.State.ACTIVE and by_tick[g_end][1] == A.State.RESOLVED and g.resolved_tick == g_end, "the Goomba is RESOLVED after %d active ticks (tick %d)" % [T.active_ticks(T.Kind.GOOMBA), g_end])
 	check(by_tick[k_end - 1][2] == A.State.ACTIVE and by_tick[k_end][2] == A.State.RESOLVED and k.resolved_tick == k_end, "the Koopa after %d (tick %d)" % [T.active_ticks(T.Kind.KOOPA), k_end])
-	check(s.get_incoming(6).is_empty() and s.attacks.attack_history().size() == 2 and not g.resolved_by_ko, "resolved attacks leave the queue but stay in the round's history")
+	check(s.get_incoming(6).is_empty() and s.attacks.attack_history().size() == 2 and g.resolution == R.EXPIRED and k.resolution == R.EXPIRED, "resolved attacks leave the queue but stay in the round's history, EXPIRED (bots' timer)")
 	var order: Array = s.events.filter(func(e): return e.type in [E.INCOMING_ACTIVATED, E.INCOMING_RESOLVED]).map(func(e): return [e.tick, e.type, e.a, e.id, e.b])
 	check(order == [[3, E.INCOMING_ACTIVATED, 0, 6, 3], [3, E.INCOMING_ACTIVATED, 1, 6, 4], [g_end, E.INCOMING_RESOLVED, 0, 6, 3], [k_end, E.INCOMING_RESOLVED, 1, 6, 4]], "INCOMING_ACTIVATED / INCOMING_RESOLVED events come in a fixed order (%s)" % str(order))
 	# a replay is identical
@@ -256,9 +280,9 @@ func test_lifecycle() -> void:
 	t.report_enemy_defeat(3, T.Kind.GOOMBA)
 	t.step()
 	t.report_ko(9, K.HAZARD)
-	check(t.get_incoming(9).is_empty() and t.attacks.attack_history().all(func(d): return d.state == A.State.RESOLVED and d.resolved_by_ko), "an eliminated target's attacks are all resolved at once, marked as such")
+	check(t.get_incoming(9).is_empty() and t.attacks.attack_history().all(func(d): return d.state == A.State.RESOLVED and d.resolution == R.TARGET_OUT), "an eliminated target's attacks are all resolved at once, marked TARGET_OUT")
 	var res: Array = events_of(t, E.INCOMING_RESOLVED)
-	check(res.size() == 2 and res.all(func(e): return e.ko), "...with INCOMING_RESOLVED events flagged ko")
+	check(res.size() == 2 and res.all(func(e): return e.cause == R.TARGET_OUT), "...with INCOMING_RESOLVED events carrying that cause")
 
 # ------------------------------------------------------------------ pressure
 
@@ -426,13 +450,9 @@ func test_player_incoming() -> void:
 	s.report_enemy_defeat(7, T.Kind.KOOPA)
 	s.report_enemy_defeat(8, T.Kind.GOOMBA)
 	check(s.get_incoming(0).size() == 2 and s.get_incoming(0).all(func(d): return d.target == 0), "attacks aimed at the real player are recorded in the player's queue")
-	var seen_states := {}
-	for i in 14:
+	for i in SYS.ACTIVATION_DELAY:
 		s.step()
-		for d in s.attacks.attack_history():
-			seen_states[d.state] = true
-	check(seen_states.has(A.State.ACTIVE) and seen_states.has(A.State.RESOLVED), "...and they activate and resolve like anyone's")
-	check(s.get_incoming(0).is_empty() and events_of(s, E.INCOMING_ACTIVATED).any(func(e): return e.id == 0), "(the events show them going active on the player)")
+	check(s.get_incoming(0).all(func(d): return d.state == A.State.ACTIVE) and events_of(s, E.INCOMING_ACTIVATED).any(func(e): return e.id == 0), "...and they activate like anyone's (the events show them going active on the player)")
 	var p = s.contestants[0]
 	check(p.alive and [p.alive, p.power, p.levels_cleared, p.progress] == row_before, "the real player's state is untouched by them (alive, power, progress, levels)")
 	# identical to a run with the system off, as far as the player goes
@@ -455,6 +475,324 @@ func test_player_incoming() -> void:
 		if e.type == E.HIT and e.id == 0:
 			hits += 1
 	check(hits == 0, "no HIT event is ever generated for the player by an attack")
+
+# ------------------------------------------------------------------ separate random streams
+
+## Runs a session `ticks` ticks with bots sending; `kill_at` maps tick -> how many player defeats are
+## reported at the start of that tick. Returns the session.
+func run_with_player_kills(seed_value: int, ticks: int, kill_at: Dictionary, pressure := true):
+	var s = S.new(seed_value)
+	s.attacks.pressure_enabled = pressure
+	for tick in ticks:
+		for i in kill_at.get(tick, 0):
+			s.report_enemy_defeat(0, T.Kind.GOOMBA if (tick + i) % 2 == 0 else T.Kind.KOOPA)
+		s.step()
+	return s
+
+## A bot's attack is identified by who, to whom, what and when; `seq` and `defeat_seq` are round-wide
+## counters that the player's own sends also advance, so they are not part of a bot's identity.
+func bot_attacks(s) -> Array:
+	return s.attacks.attack_history().filter(func(d): return d.sender != 0).map(func(d): return [d.sender, d.target, d.kind, d.sent_tick])
+
+func test_rng_streams() -> void:
+	var s = S.new(500)
+	check(SYS.BOT_SALT != SYS.PLAYER_SALT and s.attacks.bot_rng.seed == (500 ^ SYS.BOT_SALT) and s.attacks.player_rng.seed == (500 ^ SYS.PLAYER_SALT), "each stream is the session seed xor its own salt (bot %x, player %x)" % [SYS.BOT_SALT, SYS.PLAYER_SALT])
+	check(s.attacks.bot_rng.seed != s.attacks.player_rng.seed and s.attacks.bot_rng.seed != s.rng.seed and s.attacks.player_rng.seed != s.rng.seed, "...and all three streams (bot, player, main simulation) differ")
+	check(s.attacks.bot_rng.randf() != s.attacks.player_rng.randf(), "the bot and player streams do not produce the same numbers")
+	# the main simulation stream is never touched by the attack streams, whatever they are used for
+	var plain = S.new(500)
+	plain.attacks.enabled = false
+	var busy = S.new(500)
+	var main_before: int = busy.rng.state
+	for i in 40:
+		busy.attacks.report_defeat(busy, 0, T.Kind.GOOMBA)
+		busy.attacks.report_defeat(busy, 1 + i % 34, T.Kind.KOOPA)
+	check(busy.rng.state == main_before and busy.rng.state == plain.rng.state, "sending enemies never draws from the main simulation stream (its state is untouched)")
+	# the bot stream advances by a fixed amount per tick: its state depends on the tick count alone
+	var ref = S.new(501)
+	var ref_states := []
+	for tick in 60:
+		ref.step()
+		ref_states.append(ref.attacks.bot_rng.state)
+	var other = S.new(501)
+	var killed = S.new(501)
+	var kills := {5: 2, 6: 1, 20: 3, 33: 1, 50: 2}
+	var same_states := true
+	for tick in 60:
+		for i in kills.get(tick, 0):
+			killed.report_enemy_defeat(0, T.Kind.GOOMBA)
+		killed.step()
+		other.step()
+		if killed.attacks.bot_rng.state != ref_states[tick] or other.attacks.bot_rng.state != ref_states[tick]:
+			same_states = false
+	check(same_states, "the bot stream's state after every tick is the same whether or not the player defeated enemies (60 ticks)")
+	check(killed.attacks.player_defeats == 9 and killed.attacks.player_rng.state != other.attacks.player_rng.state and other.attacks.player_rng.state == S.new(501).attacks.player_rng.state, "the player stream advances only with the player's own defeats (9 accepted draws)")
+	var one_tick = S.new(502)
+	var before: int = one_tick.attacks.bot_rng.state
+	one_tick.step()
+	var probe = RandomNumberGenerator.new()
+	probe.seed = 502 ^ SYS.BOT_SALT
+	for i in (S.CONTESTANT_COUNT - 1) * SYS.DRAWS_PER_BOT:
+		probe.randf()
+	check(one_tick.attacks.bot_rng.state == probe.state and before != probe.state, "one tick consumes exactly DRAWS_PER_BOT (%d) draws for each of the 34 bots, sending or not" % SYS.DRAWS_PER_BOT)
+
+	# bot-vs-bot outcomes for a seed do not move when the player defeats enemies at other times
+	var quiet_run = run_with_player_kills(503, 150, {}, false)
+	var kill_a = run_with_player_kills(503, 150, {10: 1, 11: 2, 40: 1, 90: 3}, false)
+	var kill_b = run_with_player_kills(503, 150, {3: 2, 77: 1, 120: 4}, false)
+	var none_sent: Array = bot_attacks(quiet_run)
+	check(none_sent.size() > 5 and bot_attacks(kill_a) == none_sent and bot_attacks(kill_b) == none_sent, "every bot attack (sender, target, kind, tick) is identical with no player kills, early ones and late ones (%d bot attacks)" % none_sent.size())
+	check(kill_a.attacks.player_defeats == 7 and kill_b.attacks.player_defeats == 7 and quiet_run.attacks.player_defeats == 0, "(and the player's defeats really were reported)")
+	var bot_rows_equal := true
+	for i in range(1, 35):
+		var a = quiet_run.contestants[i]
+		var b = kill_a.contestants[i]
+		if [a.alive, a.ko_tick, a.levels_cleared, a.progress, a.power] != [b.alive, b.ko_tick, b.levels_cleared, b.progress, b.power]:
+			bot_rows_equal = false
+	check(bot_rows_equal and quiet_run.rng.state == kill_a.rng.state and quiet_run.alive_count == kill_a.alive_count, "...and so is every bot's state and the main stream, when the player's sends add no pressure")
+	check(quiet_run.attacks.bot_rng.state == kill_a.attacks.bot_rng.state and quiet_run.attacks.bot_rng.state == kill_b.attacks.bot_rng.state, "the bot stream state is the same after 150 ticks in all three runs")
+	# with pressure on, what the player sends can change bots' fates, but never the bot stream's draws
+	var hot = run_with_player_kills(503, 150, {10: 3, 11: 3, 12: 3, 13: 3, 14: 3}, true)
+	check(hot.attacks.bot_rng.state == quiet_run.attacks.bot_rng.state and hot.events.size() > 0, "even with pressure on, the player's sends cannot shift the bot stream (only game state can differ)")
+	# the player's targets are a function of the seed and the player's own defeat sequence
+	var seq_a := player_targets(504, [0, 0, 0, 0, 0, 0], false)
+	var seq_b := player_targets(504, [0, 0, 0, 0, 0, 0], true)
+	check(seq_a == seq_b and seq_a.size() == 6 and not seq_a.has(-1), "the same seed and the same defeat sequence give the same player targets, bots sending or not: %s" % str(seq_a))
+	# whenever the defeats happen, the player's n-th pick is the same random draw (the survivors it
+	# is applied to can differ by then, since the bots keep playing, but the draw does not)
+	var draws_now := player_draws(504, 6, 0, false)
+	var draws_spaced := player_draws(504, 6, 7, true)
+	var draws_late := player_draws(504, 6, 31, false)
+	check(draws_now.size() == 6 and draws_now == draws_spaced and draws_now == draws_late, "the player's n-th pick is the same draw whether the defeats come at once or tens of ticks apart, with the bots sending or not")
+	check(draws_now != player_draws(505, 6, 0, false), "...and another seed draws differently")
+	check(player_targets(505, [0, 0, 0, 0, 0, 0], false) != seq_a, "a different seed gives different player targets")
+	var later := player_targets(504, [0, 0, 0, 0, 0, 0, 0], false)
+	check(later.slice(0, 6) == seq_a, "the player's n-th target does not depend on how many defeats follow it")
+	# changing the player's timing or order only touches the player stream
+	var early = run_with_player_kills(506, 100, {2: 3}, false)
+	var late = run_with_player_kills(506, 100, {80: 3}, false)
+	var early_t: Array = early.attacks.attack_history().filter(func(d): return d.sender == 0).map(func(d): return d.target)
+	var late_t: Array = late.attacks.attack_history().filter(func(d): return d.sender == 0).map(func(d): return d.target)
+	check(early_t.size() == 3 and late_t.size() == 3, "(three player sends in each run)")
+	check(early.attacks.player_rng.state == late.attacks.player_rng.state, "the same number of player defeats leaves the player stream in the same place, whenever they happen")
+
+func player_targets(seed_value: int, senders: Array, bots_send: bool) -> Array:
+	var s = S.new(seed_value)
+	s.attacks.bots_send = bots_send
+	s.attacks.pressure_enabled = false
+	var out := []
+	for i in senders.size():
+		var a = s.report_enemy_defeat(0, T.Kind.GOOMBA)
+		out.append(a.target if a != null else -1)
+	return out
+
+## The uniform draws the targeting policy was handed for the player's first `n` defeats, with `gap`
+## ticks of the match played between them.
+func player_draws(seed_value: int, n: int, gap: int, bots_send: bool) -> Array:
+	var s = S.new(seed_value)
+	s.attacks.bots_send = bots_send
+	s.attacks.pressure_enabled = false
+	var rec = RecordPolicy.new()
+	s.attacks.targeting = rec
+	for i in n:
+		for t in gap:
+			s.step()
+		s.report_enemy_defeat(0, T.Kind.GOOMBA)
+	return rec.draws
+
+# ------------------------------------------------------------------ the real player's incoming attacks
+
+func test_player_incoming_resolution() -> void:
+	var s = quiet(600, 0)
+	var a0 = s.report_enemy_defeat(3, T.Kind.GOOMBA)
+	var a1 = s.report_enemy_defeat(4, T.Kind.KOOPA)
+	var a2 = s.report_enemy_defeat(5, T.Kind.GOOMBA)
+	var a3 = s.report_enemy_defeat(6, T.Kind.KOOPA)
+	check(s.get_incoming(0).map(func(d): return d.state) == [A.State.QUEUED, A.State.QUEUED, A.State.QUEUED, A.State.QUEUED], "QUEUED against the real player first")
+	check(s.resolve_player_incoming(a0.seq, R.OTHER) == false and a0.state == A.State.QUEUED, "a QUEUED attack cannot be resolved by the game: it is not in a level yet")
+	for i in SYS.ACTIVATION_DELAY:
+		s.step()
+	check(s.get_incoming(0).map(func(d): return d.state) == [A.State.ACTIVE, A.State.ACTIVE, A.State.ACTIVE, A.State.QUEUED], "...then ACTIVE in send order, at most MAX_ACTIVE (%d) at a time" % SYS.MAX_ACTIVE)
+	# no timer: far longer than any enemy's active time
+	for i in 120:
+		s.step()
+	check(s.get_incoming(0).map(func(d): return d.state) == [A.State.ACTIVE, A.State.ACTIVE, A.State.ACTIVE, A.State.QUEUED] and a0.resolved_tick == -1, "an ACTIVE attack on the player does not resolve on a timer (still active after 120 ticks)")
+	check(events_of(s, E.INCOMING_RESOLVED).is_empty(), "...no INCOMING_RESOLVED event was produced")
+	# explicit resolution by sequence id
+	var tick_before: int = s.tick_count
+	check(s.resolve_player_incoming(a1.seq, R.DEFEATED_BY_PLAYER) == true, "the game resolves one specific active attack by its sequence id")
+	check(a1.state == A.State.RESOLVED and a1.resolution == R.DEFEATED_BY_PLAYER and a1.resolved_tick == tick_before and a0.state == A.State.ACTIVE and a2.state == A.State.ACTIVE, "...only that one: it is RESOLVED with the reported cause, the others stay ACTIVE")
+	var ev: Array = events_of(s, E.INCOMING_RESOLVED)
+	check(ev.size() == 1 and ev[0].id == 0 and ev[0].a == a1.seq and ev[0].b == 4 and ev[0].kind == T.Kind.KOOPA and ev[0].cause == R.DEFEATED_BY_PLAYER, "an INCOMING_RESOLVED event records target, seq, sender, kind and the cause")
+	check(s.get_incoming(0).map(func(d): return d.seq) == [a0.seq, a2.seq, a3.seq], "the resolved attack left the player's queue")
+	# duplicate and bad resolves are harmless
+	var snap = s.attacks.snapshot()
+	var n_events: int = s.events.size()
+	check(s.resolve_player_incoming(a1.seq, R.DEFEATED_BY_PLAYER) == false and s.resolve_player_incoming(a1.seq, R.OTHER) == false, "resolving the same attack again is refused")
+	check(s.resolve_player_incoming(999, R.OTHER) == false and s.resolve_player_incoming(-1, R.OTHER) == false, "an unknown id is refused")
+	check(s.resolve_player_incoming(a0.seq, R.NONE) == false and s.resolve_player_incoming(a0.seq, R.EXPIRED) == false, "NONE and EXPIRED are not causes the game can report")
+	check(s.attacks.snapshot() == snap and s.events.size() == n_events, "...and none of that changed anything")
+	# the freed slot lets the waiting one in, in order
+	s.step()
+	check(a3.state == A.State.ACTIVE, "a QUEUED attack activates when a slot frees (the next tick)")
+	# each cause can be reported
+	for cause in [R.DESPAWNED, R.OTHER]:
+		var live: Array = s.get_incoming(0).filter(func(d): return d.state == A.State.ACTIVE)
+		check(s.resolve_player_incoming(live[0].seq, cause) and s.attacks.history[live[0].seq].resolution == cause, "the game can report %s" % A.resolution_name(cause))
+	# attacks aimed at a bot are not the game's to resolve; they stay timed
+	var b = quiet(601, 6)
+	var ba = b.report_enemy_defeat(1, T.Kind.GOOMBA)
+	for i in SYS.ACTIVATION_DELAY:
+		b.step()
+	check(ba.state == A.State.ACTIVE and b.resolve_player_incoming(ba.seq, R.DEFEATED_BY_PLAYER) == false and ba.state == A.State.ACTIVE, "an attack aimed at a bot cannot be resolved through the player API")
+	for i in T.active_ticks(T.Kind.GOOMBA):
+		b.step()
+	check(ba.state == A.State.RESOLVED and ba.resolution == R.EXPIRED and ba.resolved_tick == ba.activated_tick + T.active_ticks(T.Kind.GOOMBA), "...it expires on its deterministic timer, exactly as before")
+	# a bot-targeted attack timed exactly like the original model, in the same session as a player one
+	var mix = quiet(602, 0)
+	var to_player = mix.report_enemy_defeat(1, T.Kind.GOOMBA)
+	var fixed = FixedPolicy.new()
+	fixed.target = 7
+	mix.attacks.targeting = fixed
+	var to_bot = mix.report_enemy_defeat(1, T.Kind.GOOMBA)
+	for i in 30:
+		mix.step()
+	check(to_bot.state == A.State.RESOLVED and to_player.state == A.State.ACTIVE, "side by side, the bot's attack resolved on its timer and the player's is still active")
+	# the player's elimination ends them, with their own cause
+	var dead = quiet(603, 0)
+	var d0 = dead.report_enemy_defeat(2, T.Kind.GOOMBA)
+	var d1 = dead.report_enemy_defeat(3, T.Kind.KOOPA)
+	for i in 4:
+		dead.step()
+	dead.report_ko(0, K.HAZARD)
+	check(d0.resolution == R.TARGET_OUT and d1.resolution == R.TARGET_OUT and dead.get_incoming(0).is_empty(), "when the real player is eliminated, everything aimed at them ends as TARGET_OUT")
+	check(dead.resolve_player_incoming(d0.seq, R.OTHER) == false, "...and nothing can resolve it again")
+	# nothing spawns, nothing is applied: the player's own state stays exactly what the real game made it
+	var p = s.contestants[0]
+	check(p.alive and p.levels_cleared == 0 and p.power == 0, "(resolving or not, the contestant record of the real player is untouched)")
+
+# ------------------------------------------------------------------ round cleanup
+
+func test_round_cleanup() -> void:
+	var s = quiet(610, 0)
+	var a = s.report_enemy_defeat(2, T.Kind.GOOMBA)
+	var b = s.report_enemy_defeat(3, T.Kind.KOOPA)
+	for i in SYS.ACTIVATION_DELAY:
+		s.step()
+	var c = s.report_enemy_defeat(4, T.Kind.GOOMBA) # still QUEUED
+	var mid: Array = s.get_incoming(0).map(func(d): return d.state)
+	check(mid == [A.State.ACTIVE, A.State.ACTIVE, A.State.QUEUED], "(setup: two ACTIVE and one QUEUED against the player)")
+	# a level transition ends only what was ACTIVE in the level that went away
+	var n: int = s.resolve_player_active(R.LEVEL_TRANSITION)
+	check(n == 2 and a.resolution == R.LEVEL_TRANSITION and b.resolution == R.LEVEL_TRANSITION and c.state == A.State.QUEUED, "a level transition resolves the ACTIVE attacks (LEVEL_TRANSITION) and leaves the QUEUED one waiting")
+	check(s.resolve_player_active(R.LEVEL_TRANSITION) == 0 and events_of(s, E.INCOMING_RESOLVED).size() == 2, "...and doing it twice changes nothing")
+	for i in SYS.ACTIVATION_DELAY:
+		s.step()
+	check(c.state == A.State.ACTIVE, "the waiting one becomes active in the next level, in order")
+	# the round ends: everything left is resolved, with an explicit cause
+	var d = s.report_enemy_defeat(5, T.Kind.KOOPA)
+	var bot_one = quiet(611, 6)
+	var bo = bot_one.report_enemy_defeat(1, T.Kind.GOOMBA)
+	check(s.end_round() == 2 and c.resolution == R.ROUND_ENDED and d.resolution == R.ROUND_ENDED and s.get_incoming(0).is_empty(), "ending the round resolves both the active and the queued attack on the player as ROUND_ENDED")
+	var ends: Array = events_of(s, E.INCOMING_RESOLVED).filter(func(e): return e.cause == R.ROUND_ENDED)
+	check(ends.size() == 2 and s.attacks.round_ended, "...each with an INCOMING_RESOLVED event, and the system is closed")
+	var n_events: int = s.events.size()
+	var snap = s.attacks.snapshot()
+	check(s.end_round() == 0 and s.report_enemy_defeat(7, T.Kind.GOOMBA) == null and s.resolve_player_incoming(c.seq, R.OTHER) == false and s.events.size() == n_events and s.attacks.snapshot() == snap, "after that nothing is sent or resolved, and ending again is harmless")
+	s.step()
+	check(s.events.size() == n_events or s.events.slice(n_events).all(func(e): return e.type != E.INCOMING_ACTIVATED), "a closed round activates nothing")
+	check(bo.state == A.State.QUEUED and bot_one.end_round() == 1 and bo.resolution == R.ROUND_ENDED, "it covers attacks aimed at bots too")
+	# a match that finishes closes its round by itself
+	var w = quiet(612, 0)
+	var wa = w.report_enemy_defeat(2, T.Kind.KOOPA)
+	var wb = w.report_enemy_defeat(3, T.Kind.GOOMBA)
+	for i in 4:
+		w.step()
+	for id in range(1, 35):
+		w.report_ko(id, K.HAZARD)
+	check(w.finished and w.winner_id == 0 and wa.resolution == R.ROUND_ENDED and wb.resolution == R.ROUND_ENDED and w.attacks.round_ended, "when the player wins, what was still active against them ends as ROUND_ENDED")
+	var lost = quiet(613, 0)
+	var la = lost.report_enemy_defeat(2, T.Kind.KOOPA)
+	lost.step()
+	lost.report_ko(0, K.HAZARD)
+	lost.resolve_to_end()
+	check(lost.finished and la.resolution == R.TARGET_OUT and lost.get_incoming(0).is_empty(), "when the player is out first, their attacks ended as TARGET_OUT and the bots can still play the match out")
+	check(lost.attacks.history.all(func(d): return d.state == A.State.RESOLVED) and lost.attacks.round_ended, "after the match is finished nothing anywhere is unresolved")
+	# a full simulated match leaves nothing behind
+	var full = S.new(614)
+	full.resolve_to_end()
+	var leftover := 0
+	for id in 35:
+		leftover += full.get_incoming(id).size()
+	check(full.finished and leftover == 0 and full.attacks.history.all(func(d): return d.state == A.State.RESOLVED and d.resolution != R.NONE), "a full match ends with every attack RESOLVED and given a cause (%d attacks)" % full.attacks.history.size())
+	# nothing leaks into the next round
+	S.begin(615)
+	var fresh = S.current
+	check(fresh.attacks.history.is_empty() and not fresh.attacks.round_ended and fresh.get_incoming(0).is_empty() and fresh.attacks.defeats == 0 and fresh.attacks.defeat_sources.is_empty(), "the next round starts with no attacks, no kills counted and an open attack system")
+	S.clear()
+
+# ------------------------------------------------------------------ kill attribution (pure model)
+
+func test_attribution_model() -> void:
+	check(SRC.keys().has("UNKNOWN") and SRC.keys().has("PLAYER") and SRC.keys().has("ENEMY") and SRC.keys().has("ENVIRONMENT") and SRC.UNKNOWN == 0, "the model distinguishes PLAYER, ENEMY, ENVIRONMENT and UNKNOWN, and UNKNOWN is the zero value")
+	check(AT.of(null) == SRC.UNKNOWN and AT.of(5) == SRC.UNKNOWN and AT.of("x") == SRC.UNKNOWN, "no cause, or something that is not a node, is UNKNOWN")
+	var freed := Node.new()
+	freed.free()
+	check(AT.of(freed) == SRC.UNKNOWN, "a freed object is UNKNOWN")
+	var plain := Node.new()
+	check(AT.of(plain) == SRC.UNKNOWN, "an unrecognised node is UNKNOWN")
+	var player := Node.new()
+	player.add_to_group("Players")
+	check(AT.of(player) == SRC.PLAYER, "a player (stomp, hammer, star) is PLAYER")
+	var bolt := Node.new()
+	bolt.set_meta("IsPlayerProjectile", "true")
+	check(AT.of(bolt) == SRC.PLAYER, "a projectile the player threw is PLAYER")
+	var enemy := Node.new()
+	enemy.add_to_group("Enemies")
+	check(AT.of(enemy) == SRC.ENEMY, "another enemy is ENEMY")
+	# the real game scripts (a shell a real player kicked is checked in tests/battle_attack_game_test.gd)
+	var shell_like: Node = load("res://Scripts/Classes/Entities/ShellClass.gd").new()
+	shell_like.add_to_group("Enemies")
+	check(AT.of(shell_like) == SRC.UNKNOWN, "a shell nobody has kicked is UNKNOWN (not ENEMY, not PLAYER)")
+	var gone := Node.new()
+	gone.add_to_group("Players")
+	gone.free()
+	var spike: Node = load("res://Scripts/Classes/Entities/Objects/SpikeBall.gd").new()
+	spike.add_to_group("Enemies")
+	check(AT.of(spike) == SRC.ENVIRONMENT, "a spike ball is ENVIRONMENT")
+	var icicle: Node = load("res://Scripts/Classes/Entities/Enemies/Icicle.gd").new()
+	icicle.add_to_group("Enemies")
+	check(AT.of(icicle) == SRC.ENVIRONMENT, "a falling icicle is ENVIRONMENT, though it is an Enemy subclass")
+	# blocks: only a bump the player made, recently, counts
+	var block := Node.new()
+	check(AT.of(block) == SRC.UNKNOWN, "a bouncing block nobody was seen bumping is UNKNOWN")
+	AT.tag_block_bump(block, player)
+	check(AT.of(block) == SRC.PLAYER, "a block the player just bumped is PLAYER")
+	block.set_meta(AT.BUMP_META, [player, Engine.get_physics_frames() - AT.BUMP_FRAMES - 1])
+	check(AT.of(block) == SRC.UNKNOWN, "...but not once the bump is old")
+	block.set_meta(AT.BUMP_META, [gone, Engine.get_physics_frames()])
+	check(AT.of(block) == SRC.UNKNOWN, "...nor when the bumper is gone")
+	AT.tag_block_bump(null, player)
+	AT.tag_block_bump(block, null) # (must not raise)
+	check(AT.name_of(SRC.PLAYER) == "PLAYER" and AT.name_of(99) == "UNKNOWN", "names are readable")
+	# what the session does with an attribution
+	var g := "res://Scripts/Classes/Entities/Enemies/Goomba.gd"
+	S.begin(620)
+	S.current.attacks.bots_send = false
+	var sent = S.report_enemy_kill(g, SRC.PLAYER)
+	check(sent != null and sent.sender == 0 and S.current.attacks.history.size() == 1, "a PLAYER kill sends")
+	var counts_before: int = S.current.events.size()
+	for source in [SRC.ENEMY, SRC.ENVIRONMENT, SRC.UNKNOWN]:
+		check(S.report_enemy_kill(g, source) == null, "a %s kill sends nothing" % AT.name_of(source))
+	check(S.current.attacks.history.size() == 1 and S.current.events.size() == counts_before and S.current.attacks.defeats == 1 and S.current.attacks.player_defeats == 1, "...and leaves no event, no defeat and no attack behind")
+	check(S.current.attacks.defeat_sources == {SRC.PLAYER: 1, SRC.ENEMY: 1, SRC.ENVIRONMENT: 1, SRC.UNKNOWN: 1}, "every reported kill is still counted by source (%s)" % str(S.current.attacks.defeat_sources))
+	var rng_before: int = S.current.attacks.player_rng.state
+	S.report_enemy_kill(g, SRC.UNKNOWN)
+	check(S.current.attacks.player_rng.state == rng_before, "an unattributed kill does not touch the player's random stream")
+	S.clear()
+	for n in [player, bolt, enemy, shell_like, spike, icicle, block, plain]:
+		if is_instance_valid(n):
+			n.free()
 
 # ------------------------------------------------------------------ eliminated senders
 
@@ -549,7 +887,7 @@ func test_round_isolation() -> void:
 		if not fresh.get_incoming(id).is_empty() or fresh.attacks.pressure(id) != 0.0:
 			fresh_ok = false
 	check(fresh_ok, "incoming queues, active attacks, sequence numbers and the event history are all empty")
-	check(fresh.attacks.targeting != old_policy and fresh.attacks.rng.state == S.new(78).attacks.rng.state, "targeting state is new and its random stream starts from the new seed")
+	check(fresh.attacks.targeting != old_policy and fresh.attacks.bot_rng.state == S.new(78).attacks.bot_rng.state and fresh.attacks.player_rng.state == S.new(78).attacks.player_rng.state and not fresh.attacks.round_ended, "targeting state is new and both random streams start from the new seed")
 	var a = fresh.report_enemy_defeat(0, T.Kind.KOOPA)
 	check(a != null and a.seq == 0, "the first attack of the new round is seq 0 again")
 	S.clear()

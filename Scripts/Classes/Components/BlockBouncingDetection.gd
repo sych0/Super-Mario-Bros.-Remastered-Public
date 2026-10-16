@@ -8,6 +8,10 @@ extends Node
 
 signal block_bounced(block: Block)
 
+## The block of the latest `block_bounced`, for handlers connected without its argument (the Koopa's
+## `block_bounced`). Battle reads it to tell who bumped that block.
+var last_block: Block = null
+
 func _physics_process(_delta: float) -> void:
 	if detection_type == 0:
 		collision_detect()
@@ -19,7 +23,8 @@ func collision_detect() -> void:
 	if is_instance_valid(collision):
 		if collision.get_collider() is Block:
 			if collision.get_collider().bouncing:
-				block_bounced.emit(collision.get_collider())
+				last_block = collision.get_collider()
+				block_bounced.emit(last_block)
 				return
 
 func hitbox_detect() -> void:
@@ -28,6 +33,7 @@ func hitbox_detect() -> void:
 	for i in hitbox.get_overlapping_bodies():
 		if i is Block:
 			if i.bouncing:
+				last_block = i
 				block_bounced.emit(i)
 				if can_change_direction:
 					owner.direction = sign(owner.global_position.x - i.global_position.x)

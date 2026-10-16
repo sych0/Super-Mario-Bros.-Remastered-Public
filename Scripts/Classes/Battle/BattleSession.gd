@@ -37,9 +37,10 @@ var level := 1
 ##   SENT            id = sender,   a = seq, b = target, kind
 ##   RECEIVED        id = target,   a = seq, b = sender, kind (the same moment as SENT, from the target's side)
 ##   INCOMING_ACTIVATED  id = target, a = seq, b = sender, kind
-##   INCOMING_RESOLVED   id = target, a = seq, b = sender, kind, ko = true if it ended because the target was eliminated
+##   INCOMING_RESOLVED   id = target, a = seq, b = sender, kind, cause = BattleAttack.Resolution
+##   (ENEMY_DEFEATED also carries `defeat`, the round's defeat number it was sent for.)
 var events: Array[Dictionary] = []
-## The enemy send / receive loop of this round (state, queues, targeting, its own random stream).
+## The enemy send / receive loop of this round (state, queues, targeting, its own random streams).
 var attacks: BattleAttackSystem = null
 ## Whether new sessions run the attack system. Tests switch it off to compare with the attack-free model.
 static var default_attacks_enabled := true
@@ -135,25 +136,57 @@ func report_level_complete() -> void:
 		p.progress = 0.0
 		_log(EventType.LEVEL_CLEAR, PLAYER_ID, p.levels_cleared)
 
-## `id` defeated an enemy of BattleEnemyType.Kind `kind` (the real player through the game's kill
-## path). Returns the attack that was sent, or null if none was (see BattleAttackSystem.report_defeat).
+## `id` defeated an enemy of BattleEnemyType.Kind `kind`. Returns the attack that was sent, or null
+## if none was (see BattleAttackSystem.report_defeat). This is the trusted entry: the caller has
+## already decided the defeat counts (the simulated bots, tests); the real game goes through
+## `report_enemy_kill`, which decides that from the kill's attribution.
 func report_enemy_defeat(id: int, kind: int) -> BattleAttack:
 	return attacks.report_defeat(self, id, kind)
 
-## The real player defeated an enemy whose game script is at `script_path` (called by
-## Enemy.report_battle_defeat, in Battle only). The enemy is turned into a plain BattleEnemyType.Kind
-## here, at the edge, and only that goes on; unsupported enemies (shells, plants, bosses) are ignored.
+## The real game killed an enemy whose game script is at `script_path` (called by
+## Enemy.report_battle_defeat, in Battle only), and `source` (BattleAttribution.Source) says what
+## the kill is attributable to. The kill is always counted by source; an enemy is sent only when the
+## source is PLAYER and the enemy is a kind Battle supports (shells, plants and bosses are not sent
+## yet). The enemy is turned into a plain BattleEnemyType.Kind here, at the edge, and only that goes on.
 ## The session decides everything else (whether anything is sent, and to whom). No-op without a
 ## current session.
-static func report_player_defeat(script_path: String) -> BattleAttack:
+static func report_enemy_kill(script_path: String, source: int) -> BattleAttack:
+	if current == null:
+		return null
+	current.attacks.note_kill(source)
+	if source != BattleAttribution.Source.PLAYER:
+		return null
 	var kind := BattleEnemyType.kind_for_script(script_path)
-	if current == null or kind == BattleEnemyType.Kind.NONE:
+	if kind == BattleEnemyType.Kind.NONE:
 		return null
 	return current.report_enemy_defeat(PLAYER_ID, kind)
 
 ## `id`'s unresolved incoming enemies (QUEUED and ACTIVE, in send order) as read-only copies.
 func get_incoming(id: int) -> Array[Dictionary]:
 	return attacks.incoming(id)
+
+## The real game reports the outcome of an enemy that is ACTIVE against the real player: the attack
+## numbered `seq` (BattleAttack.seq, as in the SENT / INCOMING_ACTIVATED events and `get_incoming`) is
+## resolved with `cause`, a BattleAttack.Resolution (DEFEATED_BY_PLAYER, DESPAWNED, LEVEL_TRANSITION,
+## OTHER). Returns whether it was resolved; false, with nothing changed, if `seq` is unknown, is not
+## aimed at the real player, is still QUEUED, was already resolved (a duplicate is harmless), or the
+## round has ended. There is no timer on these: this is the only way an active attack on the real
+## player ends, besides the player's elimination, a level transition and the end of the round.
+func resolve_player_incoming(seq: int, cause: int) -> bool:
+	if seq < 0 or seq >= attacks.history.size() or attacks.history[seq].target != PLAYER_ID:
+		return false
+	return attacks.resolve_incoming(self, seq, cause)
+
+## The level the real player was in is gone: every ACTIVE attack on them ends with `cause`
+## (BattleAttack.Resolution.LEVEL_TRANSITION). QUEUED ones were never in that level and keep waiting
+## for the next one. Returns how many were resolved.
+func resolve_player_active(cause: int) -> int:
+	return attacks.resolve_all(self, PLAYER_ID, cause, true)
+
+## Closes the round's enemy loop: everything still unresolved, on anyone, ends with ROUND_ENDED, and
+## nothing more is sent or resolved. Runs by itself when the match finishes. Returns how many it resolved.
+func end_round() -> int:
+	return attacks.end_round(self)
 
 ## KOs a contestant now. Ignored if they are already out or the match is over.
 func report_ko(id: int, cause: KoCause) -> void:
@@ -225,6 +258,7 @@ func snapshot() -> Dictionary:
 func _finish(winner: int) -> void:
 	finished = true
 	winner_id = winner
+	attacks.end_round(self) # the round is over: nothing may stay active or queued into the next one
 
 func _sort_best_first(arr: Array[BattleContestant]) -> void:
 	arr.sort_custom(func(a: BattleContestant, b: BattleContestant) -> bool: return a.outranks(b))

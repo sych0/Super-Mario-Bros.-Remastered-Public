@@ -1,5 +1,9 @@
 # 42 — Battle attacks, milestone 1 (authoritative send / receive): what was built and verified
 
+> **Update (doc 43):** three things in this document were replaced by the correctness cleanup that followed it: the single attack random stream is now two
+> (a bot stream and a player stream), attacks on the real player are resolved by the game instead of a timer, and a kill sends only when it is attributable to the
+> player (`die()` alone no longer does). Where this text says otherwise, doc 43 is current; the affected passages are marked *(superseded)*.
+
 Status: implemented on top of `108d098`. This is the first **authoritative** attack milestone: a contestant defeats an enemy, the enemy is sent to a
 surviving opponent, queues there, activates, resolves, and while it is active it makes a simulated bot more likely to be eliminated. There is **no** visual
 side to it: no attack lines, no targeting UI, no incoming enemies in the real player's level, no preview animation. (Numbered 42 because docs 38-41 are the
@@ -71,7 +75,7 @@ Appended to `session.events` after the four existing types (their numbers did no
 | `SENT` | sender | seq | target | `kind` |
 | `RECEIVED` | target | seq | sender | `kind` (the same moment as SENT, from the target's side, so the target's own event stream has it) |
 | `INCOMING_ACTIVATED` | target | seq | sender | `kind` |
-| `INCOMING_RESOLVED` | target | seq | sender | `kind`, `ko` (true if it ended because the target was eliminated) |
+| `INCOMING_RESOLVED` | target | seq | sender | `kind`, `ko` (true if it ended because the target was eliminated) *(superseded: `cause` = `BattleAttack.Resolution`, doc 43)* |
 
 A defeat is always followed by its SENT and RECEIVED on the same tick. Switching attacks off logs none of them. The preview tracks ignore the new types, so previews are unchanged.
 
@@ -84,7 +88,7 @@ Per attack, in session ticks (Battle seconds):
 
 * `QUEUED`: sent. It waits `ACTIVATION_DELAY` (3) ticks. A contestant's attacks always activate in the order they were sent.
 * `ACTIVE`: after the delay, if fewer than `MAX_ACTIVE` (3) are active on that contestant (the rest keep waiting, in order). It stays active for its kind's `active_ticks`.
-* `RESOLVED`: expired, or its target was eliminated (resolved at once, `resolved_by_ko`). It then contributes nothing.
+* `RESOLVED`: expired, or its target was eliminated (resolved at once, `resolved_by_ko`). It then contributes nothing. *(superseded: attacks carry a `resolution` cause, and an ACTIVE attack on the real player has no timer, see doc 43)*
 
 Order within a tick: the lifecycle runs first (so this tick's bots feel it), then the bots move, then bot defeats are rolled, then eliminations are applied. Multiple incoming enemies are normal (queues hold any number).
 What an eliminated sender already sent still arrives; a sender who is out can never send again.
@@ -98,13 +102,13 @@ Measured (pure, deterministic): bot of average skill, ticks 40-60, 3000 seeds, s
 With identical random draws, pressure only ever eliminates bots that would otherwise have survived (735 of 3000, none the other way round). Through the whole loop (a sender keeps sending a Goomba or Koopa to bot 5 every 3 s): 131 of 200
 seeds eliminate it within 45 s against 87 without, mean life 28.4 s against 34.7 s. Whole matches with attacks on are about 11 % shorter (median 344 ticks against 388 over 200 seeds), and 30 of 30 tested seeds play out differently.
 
-**Randomness.** The loop has its own stream (seeded from the session seed), used for bot defeat rolls, kinds and targets; the bots' own stream is never drawn from. Consequences, both tested: with the system on but nothing sent, a match is bit-identical to the
+**Randomness** *(superseded: two streams, doc 43)*. The loop has its own stream (seeded from the session seed), used for bot defeat rolls, kinds and targets; the bots' own stream is never drawn from. Consequences, both tested: with the system on but nothing sent, a match is bit-identical to the
 attack-free one (events, rng state, winner); with it off (`attacks.enabled = false`, or `BattleSession.default_attacks_enabled = false`) the old outcome for a seed is exactly restored. The `battle_preview_test.gd` golden hashes (outcomes of the
 pre-event-log code) pin that attack-free model, and that test runs with attacks off.
 
 ## 9. The real player as a target
 
-Bots can and do target the player (about 23 sends per match are aimed at them). Those attacks are recorded in the player's queue, activate and resolve like anyone's, and the events (`RECEIVED`, `INCOMING_ACTIVATED`,
+Bots can and do target the player (about 23 sends per match are aimed at them). Those attacks are recorded in the player's queue, activate like anyone's *(they no longer resolve on a timer: doc 43)*, and the events (`RECEIVED`, `INCOMING_ACTIVATED`,
 `INCOMING_RESOLVED`) are logged for a future UI. **Nothing consumes them:** `pressure()` is only ever used for bots, no enemy is spawned into the player's level (the Enemies group had the same 17 members before and nine seconds after
 three attacks went through the player's queue, and the real Mario was neither hurt nor shrunk), and a player under heavy fire has exactly the same time, life and KO cause as with the system off. There is no hidden penalty.
 
@@ -127,14 +131,14 @@ All attack state lives in `session.attacks`, which is created with the session, 
 
 ## 12. Things to settle before the visible attack system
 
-1. **Resolution of the player's incoming enemies must become event-driven.** For everyone, RESOLVED is currently a timer. For the real player a spawned enemy's life is decided by the real game (killed, despawned, hit the player), so the player's
+1. **(Done in doc 43.) Resolution of the player's incoming enemies must become event-driven.** For everyone, RESOLVED is currently a timer. For the real player a spawned enemy's life is decided by the real game (killed, despawned, hit the player), so the player's
    attacks will need `session.report_incoming_resolved(seq, how)` instead of the timer, and `ACTIVE` for the player will mean "spawn now". The queue shape does not need to change.
-2. **The attack random stream is shared by the player's kills and the bots' rolls.** The player's sends happen at wall-clock moments, so a match with a real player is reproducible from the seed *and the player's send times*, not from the seed alone. A separate stream for
+2. **(Done in doc 43.) The attack random stream is shared by the player's kills and the bots' rolls.** The player's sends happen at wall-clock moments, so a match with a real player is reproducible from the seed *and the player's send times*, not from the seed alone. A separate stream for
    player-originated picks would keep bot-vs-bot sends independent of how the player plays (full independence is impossible: bots die at different times and shift their own stream).
 3. **Time resolution.** The loop is in whole Battle seconds. Attack lines and preview indicators will need sub-second interpolation (the previews already do this with `presentation_alpha`).
 4. **Pressure is one number per contestant.** A visual enemy-by-enemy representation in a preview will be cosmetic only; if previews ever need the enemy to "hit" the bot, they should react to `HIT`/`KO` events, which still come from the bot model.
 5. **Events carry named extras in a dictionary.** Fine for logging; a typed accessor (or a small event class) would be worth adding when several systems read them.
-6. **Defeat attribution.** Every enemy killed in the real player's level counts as the player's (a shell the player kicked earlier still counts). That is right for 1-1; with enemies that kill each other independently (bombs, Bowser's hammers) the rule needs a closer look.
+6. **(Done in doc 43.) Defeat attribution.** Every enemy killed in the real player's level counts as the player's (a shell the player kicked earlier still counts). That is right for 1-1; with enemies that kill each other independently (bombs, Bowser's hammers) the rule needs a closer look.
 7. **Koopa timing.** A Koopa counts when it is stomped into a shell, not when the shell is later destroyed. If shells become a supported type, one of the two must stop counting or a Koopa is sent twice.
 8. **Enemies whose scripts override the death functions without the base class** (Wiggler, Podoboo, Barrel) will need an explicit `report_battle_defeat()` call when they are added.
 9. **Balance** is untouched on purpose: matches are about 11 % shorter with attacks, and the weights, delays and rates are all constants in `BattleEnemyType` / `BattleAttackSystem`.

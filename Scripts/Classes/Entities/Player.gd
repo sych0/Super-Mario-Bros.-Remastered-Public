@@ -1029,6 +1029,8 @@ func handle_block_collision_detection() -> void:
 	if is_on_ceiling():
 		for i in %BlockCollision.get_overlapping_bodies():
 			if i is Block:
+				if Global.current_game_mode == Global.GameMode.BATTLE:
+					BattleAttribution.tag_block_bump(i, self) # so a kill by this bounce counts as the player's
 				i.player_block_hit.emit(self)
 
 func handle_directions() -> void:
