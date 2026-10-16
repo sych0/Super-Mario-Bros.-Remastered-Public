@@ -15,6 +15,10 @@ extends Node
 ##      with its identity (BattleAttribution.tag_incoming), and reports it spawned
 ##      (BattleSession.report_player_incoming_spawned; refused means the node is removed at once, so
 ##      one attack is never two enemies). If no safe spot exists the attack is held, never dropped.
+## When an enemy has been reported spawned, one BattleArrivalEffect (a few thin corner brackets, 0.5 s) is
+## shown around it: a sibling node this spawner owns, never part of the enemy (doc 48). It is presentation only:
+## it starts after the report, once per attack, follows the enemy, ends by itself or with the attack, and
+## cannot change anything the enemy does or looks like.
 ## Kills are not seen here at all: the enemy's own death path reports them (Enemy.report_battle_defeat),
 ## and the session resolves the attack from the kill. A level transition ends the spawned ones
 ## (BattleHandler._exit_tree), and the session ends everything when the player is out or the round ends.
@@ -34,6 +38,8 @@ const AHEAD_SECONDS := 6.0 ## ran off ahead that long: gone (a slot cannot be he
 
 ## A switch for view-only tests that want the attack loop without enemies (like BattleScreen.live_previews).
 static var enabled := true
+## Whether a spawn shows the arrival effect. Only tests and tools that compare pictures switch it off.
+static var show_arrival := true
 ## TESTS ONLY: headless runs never render, so no VisibleOnScreenEnabler2D ever switches an enemy on;
 ## with this set, a spawned enemy is switched on by hand as it enters the level.
 static var force_process := false
@@ -44,9 +50,12 @@ var live := {} ## seq -> the real enemy node of that attack, in this level
 var spawn_log: Array[Dictionary] = [] ## {seq, kind, sender, frame, clock, position, direction, side, relaxed}
 var resolve_log: Array[Dictionary] = [] ## {seq, cause, why, frame} for what this node reported
 var fail_log: Array[Dictionary] = [] ## {seq, reason, clock}: placements that found no spot (the attack was held)
+var arrivals := {} ## seq -> the BattleArrivalEffect now showing for that attack's enemy
+var arrival_log: Array[Dictionary] = [] ## {seq, kind, frame, clock}: one entry per effect ever started (never two for a seq)
 var last_spawn_us := 0 ## cost of the latest spawn (create + tag + add + report), for measurements
 var tick_us := 0 ## cost of the latest physics frame of this node (reconcile + watch + deliver), for measurements
 var max_live := 0
+var _arrived := {} ## seq -> true once its effect has started: an attack never shows a second one
 var _off_left := {} ## seq -> seconds spent behind the view
 var _off_right := {} ## seq -> seconds spent ahead of the view
 var _handler: Node = null
@@ -66,6 +75,7 @@ func _ready() -> void:
 
 func _exit_tree() -> void:
 	live.clear() # the nodes go with the level; the handler ends their attacks
+	arrivals.clear() # the effects are this node's children and go with it
 	_off_left.clear()
 	_off_right.clear()
 
@@ -107,6 +117,7 @@ func _physics_process(delta: float) -> void:
 			active[int(r.seq)] = r
 	var view := view_rect()
 	_watch(active, view, delta)
+	_advance_arrivals(active, delta)
 	plan.sync(rows)
 	if view.has_area():
 		_deliver(active, view)
@@ -202,9 +213,38 @@ func _deliver(active: Dictionary, view: Rect2) -> void:
 		node.process_mode = Node.PROCESS_MODE_INHERIT
 	live[seq] = node
 	plan.on_spawned(seq)
+	_start_arrival(seq, kind, node)
 	last_spawn_us = Time.get_ticks_usec() - t0
 	spawn_log.append({"seq": seq, "kind": kind, "sender": int(row.sender), "frame": Engine.get_physics_frames(), "clock": plan.clock,
 		"position": spot.position, "direction": int(spot.direction), "side": spot.side, "relaxed": relaxed})
+
+# ---- the arrival effect (presentation only) -----------------------------------------------------------
+
+## Shows the arrival effect for `seq`'s enemy, once. Called only after the session accepted the spawn report, so
+## it is once per physical spawn; `_arrived` keeps it that way for the life of this node.
+func _start_arrival(seq: int, kind: int, node: Node2D) -> void:
+	if not show_arrival or _arrived.has(seq):
+		return
+	_arrived[seq] = true
+	var effect := BattleArrivalEffect.create(seq, kind, node)
+	add_child(effect)
+	arrivals[seq] = effect
+	if arrival_log.size() < 256:
+		arrival_log.append({"seq": seq, "kind": kind, "frame": Engine.get_physics_frames(), "clock": plan.clock})
+
+## Moves each effect with its enemy and ends it: when its time is up, when its attack is no longer ACTIVE
+## (killed, resolved by the session), or when its enemy is gone.
+func _advance_arrivals(active: Dictionary, delta: float) -> void:
+	for seq in arrivals.keys():
+		var effect = arrivals[seq] # untyped on purpose: either may already be freed, and a typed variable would raise on it
+		var enemy = live.get(seq, null)
+		var keep: bool = is_instance_valid(effect) and active.has(seq) and is_instance_valid(enemy) and not enemy.is_queued_for_deletion()
+		if keep:
+			keep = effect.advance(delta)
+		if not keep:
+			arrivals.erase(seq)
+			if is_instance_valid(effect):
+				effect.queue_free()
 
 # ---- live physics probes for the placer ----------------------------------------------------------------
 

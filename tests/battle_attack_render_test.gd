@@ -366,13 +366,24 @@ func test_player_incoming(layout: Dictionary, game: Rect2) -> void:
 			lit += 1
 	check(lit >= 4, "the game window's frame lights up red while attacks land on it (%d of 6 samples)" % lit)
 	var strip: Rect2 = layout.strip_a
-	# four queued icons, all dim, in the strip
+	# M6b (sampled in the column just left of the enemy's little picture, on the icon's own fill): while their lines are in the air the four icons are hollow place-holders (dark inside); once the lines land they are dim (QUEUED)
+	var hollow := 0
+	var hollow_colors := []
+	for i in 4:
+		var c := px(img, strip.position.x + 46.0 + 11.0 * i + 1.0, strip.position.y + 2.0)
+		hollow_colors.append(c.to_html(false))
+		if c.get_luminance() < 0.2:
+			hollow += 1
+	check(hollow >= 3, "four attacks whose lines are still in the air are four hollow (in transit) icons in the incoming strip (%d hollow: %s)" % [hollow, hollow_colors])
+	await wait_lines_gone()
+	await frames(40) # the 'new' outlines have faded too
+	var landed := await grab("attack_05_incoming_on_player_strip_queued")
 	var dim := 0
 	for i in 4:
-		var c := px(img, strip.position.x + 46.0 + 11.0 * i, strip.position.y + 5.5)
+		var c := px(landed, strip.position.x + 46.0 + 11.0 * i + 1.0, strip.position.y + 2.0)
 		if c.r < 0.7 and c.r > 0.3 and c.g < 0.4 and c.b < 0.3:
 			dim += 1
-	check(dim >= 3, "four attacks are four dim (QUEUED) icons in the incoming strip (%d dim)" % dim)
+	check(dim >= 3, "once the lines have landed they are four dim (QUEUED) icons in the incoming strip (%d dim)" % dim)
 	check(screen.incoming_strip.counts == Vector2i(4, 0), "(the strip counts 4 queued / 0 active)")
 	advance(3) # three go ACTIVE, the fourth waits
 	await frames(1)
@@ -387,21 +398,24 @@ func test_player_incoming(layout: Dictionary, game: Rect2) -> void:
 	await wait_lines_gone()
 	await frames(60)
 	var settled := await grab("attack_05_incoming_on_player_strip_settled")
-	var lit_icons := 0
+	var lit_icons := 0 # (nothing spawns in this test, so an ACTIVE attack is ARRIVING: amber; in the level it would be red)
+	var lit_colors := []
 	for i in 3:
-		var c := px(settled, strip.position.x + 46.0 + 11.0 * i, strip.position.y + 5.5)
-		if c.r > 0.85 and c.g < 0.35 and c.b < 0.25:
+		var c := px(settled, strip.position.x + 46.0 + 11.0 * i + 1.0, strip.position.y + 2.0)
+		lit_colors.append(c.to_html(false))
+		if c.r > 0.7 and c.g > 0.35 and c.g < 0.65 and c.b < 0.25:
 			lit_icons += 1
 	var dim_icon := px(settled, strip.position.x + 46.0 + 11.0 * 3, strip.position.y + 5.5)
 	var empty := px(settled, strip.position.x + 46.0 + 11.0 * 5 + 3.0, strip.position.y + 5.5)
 	var bar: Color = BS.STRIP_A_COLOR.lerp(Color(0.2, 0.09, 0.04), 0.92) # the strip's dark bar over its gold
-	check(lit_icons == 3, "three lit (ACTIVE) icons once the flash has died down")
+	check(lit_icons == 3, "three lit (ACTIVE, arriving: amber) icons once the flash has died down (%s)" % [lit_colors])
 	check(dim_icon.r < 0.7 and dim_icon.r > 0.3 and dim_icon.g < 0.4, "and a dim one for the attack that is still queued (%s)" % dim_icon.to_html(false))
 	check(diff(empty, bar) < 0.05, "and nothing after them (%s)" % empty.to_html(false))
 	var text_px := 0
+	var text_left := int((strip.end.x - 120.0) * shot_scale) # the per-phase counts (M6b) are coloured, and wider than the old two-number text
 	for y in range(int(strip.position.y * shot_scale), int(strip.end.y * shot_scale)):
-		for x in range(int((strip.end.x - 96.0) * shot_scale), int(strip.end.x * shot_scale)):
-			if settled.get_pixel(x, y).get_luminance() > 0.8:
+		for x in range(text_left, int(strip.end.x * shot_scale)):
+			if settled.get_pixel(x, y).get_luminance() > 0.55:
 				text_px += 1
 	check(text_px > 150, "the counts are written on the right of the strip (%d bright pixels)" % text_px)
 	var ground := px(settled, game.position.x + 100.0, game.end.y - 20.0)
