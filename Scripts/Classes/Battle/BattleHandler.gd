@@ -60,15 +60,18 @@ func _ready() -> void:
 		queue_free()
 		return
 	bound_session = session
+	if session.attacks.enabled and BattleIncomingSpawner.enabled:
+		BattleIncomingSpawner.attach(self, session) # attacks on the real player become real enemies here
 	if fresh_level:
 		session.report_level_start(Global.world_num, Global.level_num)
 	Global.level_complete_begin.connect(_on_level_complete)
 
-## The level is going away (cleared, replaced, or the round restarting): whatever was ACTIVE against
-## the real player in it is over. Their QUEUED enemies have not reached a level yet and stay queued.
+## The level is going away (cleared, a pipe to or from a bonus room, replaced, or the round restarting):
+## the incoming enemies that were physically in it are over (LEVEL_TRANSITION). ACTIVE attacks whose
+## enemy never appeared, and QUEUED ones, were never in it: they carry into the next level or room.
 func _exit_tree() -> void:
 	if bound_session != null:
-		bound_session.resolve_player_active(BattleAttack.Resolution.LEVEL_TRANSITION)
+		bound_session.resolve_player_spawned(BattleAttack.Resolution.LEVEL_TRANSITION)
 
 func _on_level_complete() -> void:
 	if level_completed or BattleSession.current == null:

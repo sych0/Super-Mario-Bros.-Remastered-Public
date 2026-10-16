@@ -11,12 +11,16 @@ extends RefCounted
 ##   weight       hazard pressure it adds to a simulated bot while it is ACTIVE
 ##   active_ticks how long it stays ACTIVE (Battle seconds) before it is RESOLVED
 ##   bot_spawn    relative chance that a simulated bot's defeat is of this kind
+##   prefab       the game's own scene that BattleEnemyFactory instantiates when an attack of this kind
+##                reaches the real player (a path only: nothing here loads it)
 
 enum Kind {NONE, GOOMBA, KOOPA}
 
 const DATA := {
-	Kind.GOOMBA: {"name": "GOOMBA", "script": "res://Scripts/Classes/Entities/Enemies/Goomba.gd", "weight": 0.5, "active_ticks": 5, "bot_spawn": 0.7},
-	Kind.KOOPA: {"name": "KOOPA", "script": "res://Scripts/Classes/Entities/Enemies/KoopaTroopa.gd", "weight": 0.8, "active_ticks": 7, "bot_spawn": 0.3},
+	Kind.GOOMBA: {"name": "GOOMBA", "script": "res://Scripts/Classes/Entities/Enemies/Goomba.gd", "weight": 0.5, "active_ticks": 5, "bot_spawn": 0.7,
+		"prefab": "res://Scenes/Prefabs/Entities/Enemies/Goomba.tscn"},
+	Kind.KOOPA: {"name": "KOOPA", "script": "res://Scripts/Classes/Entities/Enemies/KoopaTroopa.gd", "weight": 0.8, "active_ticks": 7, "bot_spawn": 0.3,
+		"prefab": "res://Scenes/Prefabs/Entities/Enemies/GreenKoopaTroopa.tscn"},
 }
 
 static func is_supported(kind: int) -> bool:
@@ -43,6 +47,9 @@ static func kind_name(kind: int) -> String:
 
 static func weight(kind: int) -> float:
 	return DATA[kind].weight if DATA.has(kind) else 0.0
+
+static func prefab(kind: int) -> String:
+	return DATA[kind].prefab if DATA.has(kind) else ""
 
 static func active_ticks(kind: int) -> int:
 	return DATA[kind].active_ticks if DATA.has(kind) else 0

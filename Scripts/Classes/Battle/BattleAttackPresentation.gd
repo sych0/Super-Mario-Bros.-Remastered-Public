@@ -85,6 +85,8 @@ func _consume(silent: bool) -> void:
 				_on_activated(int(e.a), int(e.tick))
 			BattleSession.EventType.INCOMING_RESOLVED:
 				_on_resolved(int(e.a), int(e.cause), int(e.tick))
+			BattleSession.EventType.INCOMING_SPAWNED:
+				_on_spawned(int(e.a))
 
 func _note(type: int, seq: int, sender: int, target: int, kind: int, cause := 0) -> void:
 	trace_count += 1
@@ -95,7 +97,7 @@ func _note(type: int, seq: int, sender: int, target: int, kind: int, cause := 0)
 func _on_sent(seq: int, sender: int, target: int, kind: int, tick: int, silent: bool) -> void:
 	records[seq] = {"seq": seq, "sender": sender, "target": target, "kind": kind, "state": BattleAttack.State.QUEUED,
 		"sent_tick": tick, "activated_tick": -1, "resolved_tick": -1, "cause": BattleAttack.Resolution.NONE,
-		"sent_at": clock, "received_at": -1.0, "activated_at": -1.0, "resolved_at": -1.0}
+		"sent_at": clock, "received_at": -1.0, "activated_at": -1.0, "resolved_at": -1.0, "spawned_at": -1.0}
 	_queued[target] += 1
 	_open[target].append(seq)
 	_note(BattleSession.EventType.SENT, seq, sender, target, kind)
@@ -133,6 +135,14 @@ func _on_activated(seq: int, tick: int) -> void:
 	_last_activated = clock
 	_last_activated_seq = seq
 	_note(BattleSession.EventType.INCOMING_ACTIVATED, seq, r.sender, r.target, r.kind)
+
+## The real player's attack now has its real enemy in the level (M6a only records it; M6b draws it).
+func _on_spawned(seq: int) -> void:
+	var r: Dictionary = records.get(seq, {})
+	if r.is_empty() or r.spawned_at >= 0.0:
+		return
+	r.spawned_at = clock
+	_note(BattleSession.EventType.INCOMING_SPAWNED, seq, r.sender, r.target, r.kind)
 
 func _on_resolved(seq: int, cause: int, tick: int) -> void:
 	var r: Dictionary = records.get(seq, {})
@@ -185,12 +195,13 @@ func marked_ids() -> Array:
 	return _marked.keys()
 
 ## The real player's unresolved incoming attacks, in send order, as copies: {seq, sender, kind, state,
-## flash (1..0 after it became ACTIVE), fresh (1..0 after it arrived)}. This is the incoming strip.
+## spawned (its real enemy is in the level), flash (1..0 after it became ACTIVE), fresh (1..0 after it
+## arrived)}. This is the incoming strip.
 func player_incoming() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	for seq in _open[BattleSession.PLAYER_ID]:
 		var r: Dictionary = records[seq]
-		out.append({"seq": seq, "sender": r.sender, "kind": r.kind, "state": r.state,
+		out.append({"seq": seq, "sender": r.sender, "kind": r.kind, "state": r.state, "spawned": r.spawned_at >= 0.0,
 			"flash": _fade(r.activated_at, ACTIVATION_FLASH), "fresh": _fade(r.received_at, RECEIVE_FLASH)})
 	return out
 

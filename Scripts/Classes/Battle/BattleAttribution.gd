@@ -25,6 +25,12 @@ extends RefCounted
 ##   nobody has kicked, an explosion, a block no player was seen bumping, an object this file does not know.
 ## (An enemy that falls into a pit or leaves the screen is despawned, not killed: it never reaches a
 ##  kill path at all, so there is nothing to attribute and nothing is sent.)
+##
+## The class also holds the ORIGIN of an enemy (doc 46): whether it is one of the level's own enemies
+## (native) or a Battle-incoming enemy, the physical form of an attack another contestant sent to the
+## real player. Who killed an enemy (`of`) and where it came from (`origin_of`) are separate facts:
+## the session sends only for native kills by the player, and an incoming enemy's kill resolves its
+## own attack instead.
 
 enum Source {UNKNOWN, PLAYER, ENEMY, ENVIRONMENT}
 
@@ -37,6 +43,12 @@ const ENVIRONMENT_SCRIPTS := [
 	"res://Scripts/Classes/Entities/Objects/SpikeBall.gd",
 	"res://Scripts/Classes/Entities/Enemies/Icicle.gd",
 ]
+
+## The Battle-incoming identity, as node metadata: PackedInt64Array [session uid, seq, sender, kind].
+## A value type, so the copy `Node.duplicate()` makes (the Koopa that wakes from a shell) can never
+## share or change the original's. Absent on every native enemy.
+const ORIGIN_META := "battle_incoming"
+const ORIGIN_SIZE := 4
 
 static func name_of(source: int) -> String:
 	return Source.keys()[source] if source >= 0 and source < Source.size() else "UNKNOWN"
@@ -60,6 +72,24 @@ static func of(cause: Variant) -> int:
 	if node.is_in_group("Enemies"):
 		return Source.ENEMY
 	return Source.UNKNOWN
+
+## Marks `node` as the physical enemy of attack `seq` of session `session_uid`, sent by contestant
+## `sender`, of BattleEnemyType.Kind `kind`. Only BattleIncomingSpawner calls this.
+static func tag_incoming(node: Node, session_uid: int, seq: int, sender: int, kind: int) -> void:
+	node.set_meta(ORIGIN_META, PackedInt64Array([session_uid, seq, sender, kind]))
+
+## `node`'s Battle-incoming identity [session uid, seq, sender, kind], or an empty array for a native
+## enemy (or anything malformed).
+static func origin_of(node: Node) -> PackedInt64Array:
+	if node == null or not node.has_meta(ORIGIN_META):
+		return PackedInt64Array()
+	var tag: Variant = node.get_meta(ORIGIN_META)
+	if not tag is PackedInt64Array or (tag as PackedInt64Array).size() != ORIGIN_SIZE:
+		return PackedInt64Array()
+	return (tag as PackedInt64Array).duplicate() # a copy: nobody can change the enemy's identity through it
+
+static func is_incoming(node: Node) -> bool:
+	return not origin_of(node).is_empty()
 
 ## Called by the player at the moment it bumps `block` from below, in Battle only (the caller checks
 ## the mode, so this file never needs the Global singleton): remembers who, and when, so a bouncing

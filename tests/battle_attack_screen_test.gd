@@ -4,7 +4,9 @@ extends SceneTree
 ## previews and markers on their panes, attacks aimed at the real player show in the Battle UI (the
 ## incoming strip) without anything reaching the real game (no enemy spawned, nothing taken from the
 ## player), a new round clears every visual, and Classic never gets any of it. A headless run has no
-## renderer, so pixels are checked in tests/battle_attack_render_test.gd.
+## renderer, so pixels are checked in tests/battle_attack_render_test.gd. This is the view on its own:
+## BattleIncomingSpawner is switched off, so attacks on the player never become real enemies here (that
+## is tests/battle_incoming_game_test.gd).
 ##   godot --headless --fixed-fps 60 --path . -s tests/battle_attack_screen_test.gd
 ## Script classes that mention autoloads are only reached through load() (a `-s` script is compiled
 ## before the autoloads exist).
@@ -134,6 +136,7 @@ func _run() -> void:
 	var saved_video: Dictionary = settings.file.video.duplicate(true)
 	var saved_settings_file := FileAccess.get_file_as_string(settings.SETTINGS_DIR)
 	ROUND.pre_round_override = 0.0
+	load("res://Scripts/Classes/Battle/BattleIncomingSpawner.gd").enabled = false
 
 	await start_battle()
 	await test_wiring()
@@ -146,6 +149,7 @@ func _run() -> void:
 	await test_classic()
 
 	ROUND.pre_round_override = -1.0
+	load("res://Scripts/Classes/Battle/BattleIncomingSpawner.gd").enabled = true
 	SESSION.default_attacks_enabled = true
 	for key in saved_video:
 		settings.file.video[key] = saved_video[key]

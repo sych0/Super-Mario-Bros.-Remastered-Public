@@ -156,6 +156,7 @@ func _exit_tree() -> void:
 	# Level-sized preview art is only needed while Battle is up.
 	BattlePreviewAssets.clear_cache()
 	BattleLevelSketch.clear_cache()
+	BattleEnemyFactory.clear_cache()
 
 # ---- window ownership (doc 38, 5.2) ----------------------------------------------------------
 
@@ -433,7 +434,9 @@ func _process(delta: float) -> void:
 	_ensure_driver()
 	_ensure_attack_view()
 	if attack_view != null:
-		attack_view.update(minf(delta, MAX_PRESENTATION_STEP))
+		# Presentation time runs only while the game does (doc 45 section 14): the pause menu, a death or
+		# power-up freeze (tree paused), the pre-round and a win hold (window frozen) hold the lines too.
+		attack_view.update(0.0 if presentation_held() else minf(delta, MAX_PRESENTATION_STEP))
 	refresh()
 	if driver != null:
 		for id in driver.update(BattleHandler.presentation_alpha):
@@ -529,6 +532,11 @@ func refresh() -> void:
 	_course_label.text = "%d-%d" % [session.world, session.level]
 
 # ---- round lifecycle (doc 38, section 7) -----------------------------------------------------------
+
+## Whether the attack presentation clock is held: exactly when the Battle clock is (the tree is paused
+## or the game window is frozen), since BattleHandler, which drives that clock, is pausable inside it.
+func presentation_held() -> bool:
+	return get_tree().paused or game_frozen
 
 ## The round has ended (called by BattleHandler.on_player_died for a death or a time out, and by
 ## _process for a win). Ignored unless the round is being played, so it can only happen once.

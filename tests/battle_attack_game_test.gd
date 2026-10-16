@@ -2,9 +2,10 @@ extends SceneTree
 ## The real game's side of the Battle attack loop: the real player defeating real enemies inside
 ## Battle (stomp, kick/fire/star kill, hammer, a Koopa stomped into its shell), who each kill is
 ## attributed to (only the real player's sends anything), exactly-once reporting, no reporting
-## outside Battle, attacks aimed at the real player staying active until the game resolves them
-## (never spawned into the level), the cleanup at a level transition and at the end of a round, and
-## attack state not surviving into the next round.
+## outside Battle, attacks aimed at the real player staying active until the game resolves them,
+## the cleanup at a level transition and at the end of a round, and attack state not surviving into
+## the next round. The session side only: BattleIncomingSpawner is switched off here, so no attack
+## becomes a real enemy (physical incoming enemies are tests/battle_incoming_game_test.gd).
 ##   godot --headless --fixed-fps 60 --path . -s tests/battle_attack_game_test.gd
 ## Script classes that mention autoloads are only reached through load() (a `-s` script is compiled
 ## before the autoloads exist).
@@ -115,6 +116,7 @@ func _run() -> void:
 	var saved_video: Dictionary = settings.file.video.duplicate(true)
 	var saved_settings_file := FileAccess.get_file_as_string(settings.SETTINGS_DIR)
 	ROUND.pre_round_override = 0.0
+	load("res://Scripts/Classes/Battle/BattleIncomingSpawner.gd").enabled = false
 
 	await start_battle()
 	await test_player_defeats()
@@ -123,6 +125,7 @@ func _run() -> void:
 	await test_classic()
 
 	ROUND.pre_round_override = -1.0
+	load("res://Scripts/Classes/Battle/BattleIncomingSpawner.gd").enabled = true
 	for key in saved_video:
 		settings.file.video[key] = saved_video[key]
 	var settings_out := FileAccess.open(settings.SETTINGS_DIR, FileAccess.WRITE)
@@ -378,9 +381,11 @@ func test_incoming_to_player() -> void:
 	# leaving the level (the BattleHandler going away with it) ends what was active in it
 	var handler = G.current_level.get_node("BattleHandler")
 	var active_ids: Array = s.get_incoming(0).filter(func(d): return d.state == 1).map(func(d): return d.seq)
+	check(active_ids.size() == 3 and s.report_player_incoming_spawned(active_ids[0]), "(one of the three is reported spawned, as if its enemy were in this level)")
 	handler.get_parent().remove_child(handler)
 	handler.queue_free()
-	check(active_ids.size() == 3 and active_ids.all(func(q): return s.attacks.history[q].resolution == RES.LEVEL_TRANSITION) and s.get_incoming(0).is_empty(), "a level transition resolves what was ACTIVE against the player as LEVEL_TRANSITION (%d)" % active_ids.size())
+	check(s.attacks.history[active_ids[0]].resolution == RES.LEVEL_TRANSITION, "a level transition resolves an ACTIVE attack whose enemy was in the level as LEVEL_TRANSITION")
+	check(active_ids.slice(1).all(func(q): return s.attacks.history[q].state == 1 and s.attacks.history[q].spawned_tick < 0) and s.get_incoming(0).size() == 2, "...and the two whose enemy never appeared stay ACTIVE, carried to the next level")
 	# the round ends (the player wins): whatever is left is closed with ROUND_ENDED
 	var late_a = s.report_enemy_defeat(alive_bot(), TYPES.Kind.KOOPA)
 	var late_b = s.report_enemy_defeat(alive_bot(1), TYPES.Kind.GOOMBA)

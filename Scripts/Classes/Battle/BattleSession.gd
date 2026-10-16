@@ -11,7 +11,8 @@ enum KoCause {NONE, HAZARD, TIME, FORFEIT}
 ## Things that happened to a contestant. Derived from state changes only (never from the rng),
 ## so recording them cannot change a match. Used by the opponent previews to stage outcomes.
 ## The attack events (ENEMY_DEFEATED onwards) are written by BattleAttackSystem.
-enum EventType {HIT, POWER_UP, LEVEL_CLEAR, KO, ENEMY_DEFEATED, SENT, RECEIVED, INCOMING_ACTIVATED, INCOMING_RESOLVED}
+## (New types are only ever appended, so recorded values never change meaning.)
+enum EventType {HIT, POWER_UP, LEVEL_CLEAR, KO, ENEMY_DEFEATED, SENT, RECEIVED, INCOMING_ACTIVATED, INCOMING_RESOLVED, INCOMING_SPAWNED}
 
 const CONTESTANT_COUNT := 35
 const PLAYER_ID := 0
@@ -20,6 +21,13 @@ const MAX_RESOLVE_STEPS := 20000
 
 ## The active match. Static so it outlives level scene changes (like BooRaceHandler state).
 static var current: BattleSession = null
+static var _last_uid := 0
+
+## This session's identity, unique for the life of the program (1, 2, 3...). Attack sequence numbers
+## restart at 0 every round, so an enemy carrying an attack's identity carries this too (doc 46):
+## a report from an earlier round's enemy can never be taken for this round's attack. Not part of
+## `snapshot()`: it says which session, not what happened in it.
+var uid := 0
 
 var seed_value := 0
 var rng := RandomNumberGenerator.new()
@@ -38,6 +46,8 @@ var level := 1
 ##   RECEIVED        id = target,   a = seq, b = sender, kind (the same moment as SENT, from the target's side)
 ##   INCOMING_ACTIVATED  id = target, a = seq, b = sender, kind
 ##   INCOMING_RESOLVED   id = target, a = seq, b = sender, kind, cause = BattleAttack.Resolution
+##                       (+ source = BattleAttribution.Source when the real game killed its enemy)
+##   INCOMING_SPAWNED    id = target (the real player), a = seq, b = sender, kind: its one real enemy is in the level
 ##   (ENEMY_DEFEATED also carries `defeat`, the round's defeat number it was sent for.)
 var events: Array[Dictionary] = []
 ## The enemy send / receive loop of this round (state, queues, targeting, its own random streams).
@@ -54,6 +64,8 @@ static func clear() -> void:
 	current = null
 
 func _init(seed_value_: int = 0) -> void:
+	_last_uid += 1
+	uid = _last_uid
 	seed_value = seed_value_
 	rng.seed = seed_value_
 	var ranks: Array[int] = []
@@ -145,13 +157,19 @@ func report_enemy_defeat(id: int, kind: int) -> BattleAttack:
 
 ## The real game killed an enemy whose game script is at `script_path` (called by
 ## Enemy.report_battle_defeat, in Battle only), and `source` (BattleAttribution.Source) says what
-## the kill is attributable to. The kill is always counted by source; an enemy is sent only when the
-## source is PLAYER and the enemy is a kind Battle supports (shells, plants and bosses are not sent
-## yet). The enemy is turned into a plain BattleEnemyType.Kind here, at the edge, and only that goes on.
+## the kill is attributable to. `origin` is the enemy's Battle-incoming identity
+## (BattleAttribution.origin_of): empty for the level's own (native) enemies.
+##   native:   the kill is counted by source; an enemy is sent only when the source is PLAYER and the
+##             enemy is a kind Battle supports (shells, plants and bosses are not sent yet). The enemy
+##             is turned into a plain BattleEnemyType.Kind here, at the edge, and only that goes on.
+##   incoming: `report_incoming_kill` - it resolves its own attack and NEVER sends (rule R0).
 ## The session decides everything else (whether anything is sent, and to whom). No-op without a
 ## current session.
-static func report_enemy_kill(script_path: String, source: int) -> BattleAttack:
+static func report_enemy_kill(script_path: String, source: int, origin := PackedInt64Array()) -> BattleAttack:
 	if current == null:
+		return null
+	if not origin.is_empty():
+		current.report_incoming_kill(origin, source)
 		return null
 	current.attacks.note_kill(source)
 	if source != BattleAttribution.Source.PLAYER:
@@ -160,6 +178,27 @@ static func report_enemy_kill(script_path: String, source: int) -> BattleAttack:
 	if kind == BattleEnemyType.Kind.NONE:
 		return null
 	return current.report_enemy_defeat(PLAYER_ID, kind)
+
+## The real game killed an enemy that this session sent to the real player; `origin` is its identity
+## (BattleAttribution.origin_of: [session uid, seq, sender, kind]). If it is this session's attack, aimed
+## at the real player, ACTIVE and spawned, that attack is resolved: DEFEATED_BY_PLAYER when the kill is
+## the player's (`source` PLAYER), OTHER otherwise, with `source` on the event. Anything else is residue
+## (its attack already ended: a squashed Goomba, the Koopa that woke from a stomped incoming Koopa's
+## shell) or stale (another round's): counted, nothing more. Never an ENEMY_DEFEATED, never a send,
+## never a player-stream draw: an incoming enemy's death is not a defeat that sends (rule R0, doc 46).
+## Returns whether an attack was resolved.
+func report_incoming_kill(origin: PackedInt64Array, source: int) -> bool:
+	attacks.note_incoming_kill(source)
+	if origin.size() != BattleAttribution.ORIGIN_SIZE or origin[0] != uid:
+		return false
+	var seq := int(origin[1])
+	if seq < 0 or seq >= attacks.history.size():
+		return false
+	var attack: BattleAttack = attacks.history[seq]
+	if attack.target != PLAYER_ID or attack.sender != int(origin[2]) or attack.kind != int(origin[3]) or attack.spawned_tick < 0:
+		return false
+	var cause := BattleAttack.Resolution.DEFEATED_BY_PLAYER if source == BattleAttribution.Source.PLAYER else BattleAttack.Resolution.OTHER
+	return attacks.resolve_incoming(self, seq, cause, {"source": source})
 
 ## `id`'s unresolved incoming enemies (QUEUED and ACTIVE, in send order) as read-only copies.
 func get_incoming(id: int) -> Array[Dictionary]:
@@ -177,11 +216,25 @@ func resolve_player_incoming(seq: int, cause: int) -> bool:
 		return false
 	return attacks.resolve_incoming(self, seq, cause)
 
-## The level the real player was in is gone: every ACTIVE attack on them ends with `cause`
-## (BattleAttack.Resolution.LEVEL_TRANSITION). QUEUED ones were never in that level and keep waiting
-## for the next one. Returns how many were resolved.
+## Every ACTIVE attack on the real player ends with `cause`, spawned or not; QUEUED ones stay.
+## (Tools and tests; a level transition uses `resolve_player_spawned`.) Returns how many were resolved.
 func resolve_player_active(cause: int) -> int:
 	return attacks.resolve_all(self, PLAYER_ID, cause, true)
+
+## The real game's incoming enemy for the ACTIVE attack numbered `seq` is now in the player's level
+## (called by BattleIncomingSpawner once the node is added). Returns false, with nothing changed,
+## unless that attack is aimed at the real player, ACTIVE, not spawned before, and the round is open:
+## one attack is never two enemies, however often this is called. Logs INCOMING_SPAWNED.
+func report_player_incoming_spawned(seq: int) -> bool:
+	return attacks.mark_spawned(self, seq)
+
+## The level the real player was in is gone (BattleHandler leaving the tree): every ACTIVE attack on
+## them whose enemy was SPAWNED in it ends with `cause` (BattleAttack.Resolution.LEVEL_TRANSITION).
+## ACTIVE attacks whose enemy never appeared were never in that level: they stay ACTIVE, keep their
+## place in the order, and are delivered in the next level or room. QUEUED ones keep waiting too.
+## Returns how many were resolved.
+func resolve_player_spawned(cause: int) -> int:
+	return attacks.resolve_all(self, PLAYER_ID, cause, true, true)
 
 ## Closes the round's enemy loop: everything still unresolved, on anyone, ends with ROUND_ENDED, and
 ## nothing more is sent or resolved. Runs by itself when the match finishes. Returns how many it resolved.

@@ -18,13 +18,14 @@ var _battle_defeat_reported := false
 ## Projectile, Block or Shell that hit it, a hazard - or null when nothing is known. BattleAttribution
 ## turns it into who the kill counts as, and only a kill attributable to the real player sends an enemy.
 ## Reports at most once per enemy (the first report wins) and does nothing outside Battle. Only the
-## enemy's script path and that attribution leave here: Battle turns the path into a plain enemy kind
+## enemy's script path, that attribution and its Battle-incoming identity (empty for the level's own
+## enemies) leave here: Battle turns the path into a plain enemy kind and decides what the kill means
 ## (BattleSession.report_enemy_kill).
 func report_battle_defeat(cause = null) -> void: # untyped: a freed Player must not trip an Object-typed parameter
 	if _battle_defeat_reported or Global.current_game_mode != Global.GameMode.BATTLE:
 		return
 	_battle_defeat_reported = true
-	BattleSession.report_enemy_kill((get_script() as Script).resource_path, BattleAttribution.of(cause))
+	BattleSession.report_enemy_kill((get_script() as Script).resource_path, BattleAttribution.of(cause), BattleAttribution.origin_of(self))
 
 func _enter_tree() -> void:
 	add_to_group("Enemies")

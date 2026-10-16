@@ -26,6 +26,10 @@ var activated_tick := -1
 var resolved_tick := -1
 var resolution := Resolution.NONE
 var defeat_seq := 0 ## which defeat of the round (0, 1, 2...) this attack was sent for
+## Real player only: the tick its enemy was physically spawned into the player's level, or -1 while
+## it has not been (QUEUED, or ACTIVE and still arriving). Set once, by
+## BattleSession.report_player_incoming_spawned: one attack is never more than one enemy.
+var spawned_tick := -1
 
 static func resolution_name(resolution_: int) -> String:
 	return Resolution.keys()[resolution_] if resolution_ >= 0 and resolution_ < Resolution.size() else "?"
@@ -33,4 +37,4 @@ static func resolution_name(resolution_: int) -> String:
 func to_dict() -> Dictionary:
 	return {"seq": seq, "sender": sender, "target": target, "kind": kind, "sent_tick": sent_tick,
 		"state": state, "activated_tick": activated_tick, "resolved_tick": resolved_tick,
-		"resolution": resolution, "defeat_seq": defeat_seq}
+		"resolution": resolution, "defeat_seq": defeat_seq, "spawned_tick": spawned_tick}

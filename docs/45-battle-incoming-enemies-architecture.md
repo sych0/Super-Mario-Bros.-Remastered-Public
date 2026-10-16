@@ -1,5 +1,9 @@
 # 45 — Battle: physical incoming enemies in the real player's game (architecture)
 
+> **Update:** milestone M6a is implemented as designed here; see doc 46. Two details differ: the tag also carries the enemy kind
+> (`[session uid, seq, sender, kind]`), and the off-screen margin is 8 px, not 16. A GL run showed the game freezes a Goomba about
+> 10 px past the edge, so 16 px would never be reached.
+
 Status: **design only**, on top of `7de7c06` (docs 42–44). Nothing in the game is changed. The one piece of code is an isolated spike,
 `tests/tools/battle_incoming_spawn_spike.gd` (prototype, not wired into gameplay), whose results are quoted below.
 

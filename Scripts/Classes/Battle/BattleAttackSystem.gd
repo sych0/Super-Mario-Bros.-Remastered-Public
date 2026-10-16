@@ -15,7 +15,9 @@ extends RefCounted
 ##             and multiplies the bot's hazard by (1 + the sum of its active enemies' weights).
 ##             Against the REAL PLAYER there is no timer at all: it stays ACTIVE until the real game
 ##             reports an outcome (`resolve_incoming`), the level it is active in ends
-##             (`resolve_all`), the player is eliminated, or the round ends.
+##             (`resolve_all`), the player is eliminated, or the round ends. While ACTIVE it is either
+##             still arriving or SPAWNED (`mark_spawned`: its one real enemy is in the player's level);
+##             only spawned ones end with their level, the others carry into the next one.
 ##   RESOLVED  over, with a BattleAttack.Resolution saying why. It no longer counts for anything.
 ## A contestant's attacks always activate in the order they were sent.
 ##
@@ -55,7 +57,8 @@ var next_seq := 0
 var defeats := 0 ## enemy defeats recorded this round (the next one's BattleAttack.defeat_seq)
 var player_defeats := 0 ## how many of them were the real player's
 var round_ended := false ## `end_round` ran: nothing more is sent or resolved
-var defeat_sources: Dictionary = {} ## BattleAttribution.Source -> kills the real game reported, attributable or not
+var defeat_sources: Dictionary = {} ## BattleAttribution.Source -> kills of NATIVE enemies the real game reported, attributable or not
+var incoming_kill_sources: Dictionary = {} ## BattleAttribution.Source -> kills of Battle-incoming enemies (they resolve, never send)
 var history: Array[BattleAttack] = [] ## every attack of the round, in send order
 var queues: Array = [] ## per contestant: Array[BattleAttack] of its unresolved attacks, in send order
 
@@ -76,6 +79,11 @@ func rng_for(sender: int) -> RandomNumberGenerator:
 ## source, so a kill that was NOT attributable to the player still leaves a trace and sends nothing.
 func note_kill(source: int) -> void:
 	defeat_sources[source] = int(defeat_sources.get(source, 0)) + 1
+
+## The real game reported the kill of a Battle-incoming enemy (one this loop sent to the real player),
+## attributed to `source`. Counted apart from native kills; such a kill never sends (doc 46, rule R0).
+func note_incoming_kill(source: int) -> void:
+	incoming_kill_sources[source] = int(incoming_kill_sources.get(source, 0)) + 1
 
 ## `sender` defeated an enemy of `kind`. Returns the attack it sent, or null if nothing was sent:
 ## attacks are off, the kind is unsupported, the match is over, the sender is already out, or
@@ -174,11 +182,25 @@ func on_contestant_out(session: BattleSession, id: int) -> void:
 		return
 	resolve_all(session, id, BattleAttack.Resolution.TARGET_OUT)
 
+## The ACTIVE attack numbered `seq`, aimed at the real player, now has its one real enemy in the
+## player's level. Refused (false, nothing changed) unless the attack exists, is aimed at the real
+## player, is ACTIVE, has not been spawned before, and the round is open: a second report for the
+## same attack can never make a second enemy count.
+func mark_spawned(session: BattleSession, seq: int) -> bool:
+	if not enabled or round_ended or seq < 0 or seq >= history.size():
+		return false
+	var attack: BattleAttack = history[seq]
+	if attack.target != BattleSession.PLAYER_ID or attack.state != BattleAttack.State.ACTIVE or attack.spawned_tick >= 0:
+		return false
+	attack.spawned_tick = session.tick_count
+	session.record(BattleSession.EventType.INCOMING_SPAWNED, attack.target, attack.seq, attack.sender, {"kind": attack.kind})
+	return true
+
 ## Resolves the ACTIVE attack numbered `seq` with `cause`. Returns false, and changes nothing, if
 ## there is no such attack, it is still QUEUED (it has not reached its target yet), it is already
 ## RESOLVED (a duplicate report is harmless), the round has ended, or `cause` is NONE or EXPIRED
 ## (an expiry is the bots' timer, not something the game reports).
-func resolve_incoming(session: BattleSession, seq: int, cause: int) -> bool:
+func resolve_incoming(session: BattleSession, seq: int, cause: int, extra := {}) -> bool:
 	if not enabled or round_ended or seq < 0 or seq >= history.size():
 		return false
 	if cause == BattleAttack.Resolution.NONE or cause == BattleAttack.Resolution.EXPIRED:
@@ -187,18 +209,19 @@ func resolve_incoming(session: BattleSession, seq: int, cause: int) -> bool:
 	if attack.state != BattleAttack.State.ACTIVE:
 		return false
 	queues[attack.target].erase(attack)
-	_resolve(session, attack, cause)
+	_resolve(session, attack, cause, extra)
 	return true
 
-## Resolves every unresolved attack on `id` (or only its ACTIVE ones) with `cause`, in send order.
-## Returns how many were resolved.
-func resolve_all(session: BattleSession, id: int, cause: int, active_only := false) -> int:
+## Resolves every unresolved attack on `id` (or only its ACTIVE ones, or only its ACTIVE ones whose
+## enemy has been spawned) with `cause`, in send order. Returns how many were resolved.
+func resolve_all(session: BattleSession, id: int, cause: int, active_only := false, spawned_only := false) -> int:
 	if not enabled:
 		return 0
 	var kept: Array[BattleAttack] = []
 	var n := 0
 	for attack in queues[id]:
-		if active_only and attack.state != BattleAttack.State.ACTIVE:
+		var keep: bool = ((active_only or spawned_only) and attack.state != BattleAttack.State.ACTIVE) or (spawned_only and attack.spawned_tick < 0)
+		if keep:
 			kept.append(attack)
 		else:
 			_resolve(session, attack, cause)
@@ -218,11 +241,13 @@ func end_round(session: BattleSession) -> int:
 	round_ended = true
 	return n
 
-func _resolve(session: BattleSession, attack: BattleAttack, cause: int) -> void:
+func _resolve(session: BattleSession, attack: BattleAttack, cause: int, extra := {}) -> void:
 	attack.state = BattleAttack.State.RESOLVED
 	attack.resolved_tick = session.tick_count
 	attack.resolution = cause
-	session.record(BattleSession.EventType.INCOMING_RESOLVED, attack.target, attack.seq, attack.sender, {"kind": attack.kind, "cause": cause})
+	var fields := {"kind": attack.kind, "cause": cause}
+	fields.merge(extra)
+	session.record(BattleSession.EventType.INCOMING_RESOLVED, attack.target, attack.seq, attack.sender, fields)
 
 # ---- reading ---------------------------------------------------------------------------------
 
@@ -263,7 +288,8 @@ func snapshot() -> Dictionary:
 	var rows: Array = []
 	for attack in history:
 		var d := attack.to_dict()
-		rows.append([d.seq, d.sender, d.target, d.kind, d.sent_tick, d.state, d.activated_tick, d.resolved_tick, d.resolution, d.defeat_seq])
+		rows.append([d.seq, d.sender, d.target, d.kind, d.sent_tick, d.state, d.activated_tick, d.resolved_tick, d.resolution, d.defeat_seq, d.spawned_tick])
 	return {"enabled": enabled, "bots_send": bots_send, "pressure_enabled": pressure_enabled, "round_ended": round_ended,
 		"next_seq": next_seq, "defeats": defeats, "player_defeats": player_defeats, "defeat_sources": defeat_sources.duplicate(),
+		"incoming_kill_sources": incoming_kill_sources.duplicate(),
 		"bot_rng_state": bot_rng.state, "player_rng_state": player_rng.state, "history": rows}

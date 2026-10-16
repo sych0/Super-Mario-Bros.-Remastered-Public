@@ -170,6 +170,7 @@ func _run() -> void:
 	KIND = load("res://Scripts/Classes/Battle/BattleEnemyType.gd").Kind
 	GEO = load("res://Scripts/Classes/Battle/BattleAttackGeometry.gd")
 	load("res://Scripts/Classes/Battle/BattleRound.gd").pre_round_override = 0.0
+	load("res://Scripts/Classes/Battle/BattleIncomingSpawner.gd").enabled = false # the view only: attacks on the player stay off the level here
 	FixedPolicy = GDScript.new()
 	FixedPolicy.source_code = FIXED_SOURCE
 	FixedPolicy.reload()
@@ -214,6 +215,7 @@ func _run() -> void:
 	for key in saved_video:
 		S.file.video[key] = saved_video[key]
 	load("res://Scripts/Classes/Battle/BattleRound.gd").pre_round_override = -1.0
+	load("res://Scripts/Classes/Battle/BattleIncomingSpawner.gd").enabled = true
 	var settings_out := FileAccess.open(S.SETTINGS_DIR, FileAccess.WRITE)
 	settings_out.store_string(saved_settings_file)
 	settings_out.close()
