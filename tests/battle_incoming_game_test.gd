@@ -580,10 +580,10 @@ func test_pause_freezes_flights() -> void:
 	var p = FixedPolicy.new()
 	p.target = alive_bot(3)
 	s.attacks.targeting = p
-	var a = s.report_enemy_defeat(alive_bot(), TYPES.Kind.GOOMBA)
+	var a = s.report_enemy_defeat(0, TYPES.Kind.GOOMBA) # the player's send: the reticle's flight (0.25 s)
 	await frames(6)
 	var flight = sc.attack_view.flight_of(a.seq)
-	check(flight != null, "(a line is in the air)")
+	check(flight != null, "(a reticle flight is in the air)")
 	var hud: CanvasLayer = G.get_node("GameHUD")
 	hud.activate_pause_menu()
 	await frames(3)
@@ -592,10 +592,10 @@ func test_pause_freezes_flights() -> void:
 	var tick0: int = s.tick_count
 	await frames(90)
 	check(paused and sc.presentation_held(), "the game is paused")
-	check(sc.attack_view.clock == clock0 and flight != null and flight.travel(sc.attack_view.clock) == travel0 and s.tick_count == tick0, "for 1.5 s the line, the presentation clock and the Battle clock stand still (clock %.3f)" % clock0)
+	check(sc.attack_view.clock == clock0 and flight != null and flight.travel(sc.attack_view.clock) == travel0 and s.tick_count == tick0 and not sc.target_reticle.flying.is_empty(), "for 1.5 s the flight, the presentation clock and the Battle clock stand still (clock %.3f)" % clock0)
 	hud.get_node("BattlePause").close()
 	await frames(20)
-	check(not paused and sc.attack_view.clock > clock0 and flight.travel(sc.attack_view.clock) > travel0, "closing the menu resumes the line from where it stood")
+	check(not paused and sc.attack_view.clock > clock0 and flight.travel(sc.attack_view.clock) > travel0, "closing the menu resumes the flight from where it stood")
 	aim_at_player()
 
 # ---- the round ends --------------------------------------------------------------------------------------------------

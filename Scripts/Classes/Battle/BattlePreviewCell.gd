@@ -48,6 +48,13 @@ func refresh(c: BattleContestant) -> void:
 		_signature = sig
 		queue_redraw()
 
+## Holds this picture as it is (the round is over): the cell keeps a private copy of the contestant it was last drawn for, so a
+## later redraw, whatever the session does meanwhile (the results fast-forward the match), still draws this same picture. The live
+## frame is whatever the track last wrote; with the driver stopped nothing writes it again.
+func freeze() -> void:
+	if _contestant != null:
+		_contestant = _contestant.copy()
+
 ## Attaches (or, with null, detaches) a live preview.
 func set_live(live_renderer_: BattlePreviewRenderer, frame_: BattlePreviewFrame) -> void:
 	live_renderer = live_renderer_

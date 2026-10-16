@@ -34,3 +34,23 @@ func outranks(other: BattleContestant) -> bool:
 	if progress != other.progress:
 		return progress > other.progress
 	return tiebreak > other.tiebreak
+
+## A detached copy of this contestant's state (for a view that must keep showing it as it was).
+func copy() -> BattleContestant:
+	var c := BattleContestant.new()
+	c.id = id
+	c.is_bot = is_bot
+	c.alive = alive
+	c.ko_tick = ko_tick
+	c.ko_cause = ko_cause
+	c.placement = placement
+	c.levels_cleared = levels_cleared
+	c.progress = progress
+	c.time_left = time_left
+	c.power = power
+	c.skill = skill
+	c.tiebreak = tiebreak
+	c.ko_by = ko_by
+	c.incoming = incoming
+	c.target_id = target_id
+	return c

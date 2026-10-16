@@ -2,9 +2,10 @@ class_name BattleAttackPresentation
 extends RefCounted
 ## The visible side of the enemy send / receive loop, as plain data. It READS the authoritative event
 ## log (SENT, RECEIVED, INCOMING_ACTIVATED, INCOMING_RESOLVED) and turns it into what the Battle
-## screen draws: the lines that fly from a sender to a target, which panes are marked as targets,
-## and each contestant's count of queued / active incoming enemies (the real player's list is the
-## incoming strip).
+## screen draws: the real player's reticle flights (`player_flights`), the thin red lines of attacks
+## on the real player (`flights` with the player as target), and each contestant's count of queued / active
+## incoming enemies (the real player's list is the incoming strip). A bot's send at another bot is
+## bookkept (records, counts) but never presented (doc 47 B35-ATTACK-002).
 ##
 ## The session decides everything; this decides only how it looks. It never calls a mutating method
 ## of BattleSession or BattleAttackSystem, never stores a reference to an event (everything it keeps
@@ -53,7 +54,6 @@ var _queued := PackedInt32Array() ## per contestant: unresolved attacks still QU
 var _active := PackedInt32Array() ## per contestant: attacks ACTIVE
 var _open: Array = [] ## per contestant: seqs of unresolved attacks, in send order
 var _flight_by_seq := {}
-var _marked := {} ## contestant id -> strength 0..1 of the strongest line still marking it
 var _last_received := -1.0e9
 var _last_activated := -1.0e9
 var _last_activated_seq := -1
@@ -92,11 +92,10 @@ func target_of(id: int) -> int:
 var player_target: int:
 	get: return target_of(BattleSession.PLAYER_ID)
 
-## Forgets everything on screen (lines, flashes). The counts stay: they mirror the session.
+## Forgets everything on screen (lines, flights, flashes). The counts stay: they mirror the session.
 func clear_flights() -> void:
 	flights.clear()
 	_flight_by_seq.clear()
-	_marked.clear()
 	_resolved_recent.clear()
 
 # ---- reading the log --------------------------------------------------------------------------------
@@ -130,7 +129,7 @@ func _on_sent(seq: int, sender: int, target: int, kind: int, tick: int, silent: 
 	records[seq] = {"seq": seq, "sender": sender, "target": target, "kind": kind, "state": BattleAttack.State.QUEUED,
 		"sent_tick": tick, "activated_tick": -1, "resolved_tick": -1, "cause": BattleAttack.Resolution.NONE,
 		"sent_at": clock, "received_at": -1.0, "activated_at": -1.0, "resolved_at": -1.0, "spawned_at": -1.0,
-		"landed_at": clock if silent else clock + BattleAttackFlight.DURATION}
+		"landed_at": clock if silent else clock + BattleAttackFlight.duration_for(sender)}
 	_queued[target] += 1
 	_open[target].append(seq)
 	_note(BattleSession.EventType.SENT, seq, sender, target, kind)
@@ -140,12 +139,16 @@ func _on_sent(seq: int, sender: int, target: int, kind: int, tick: int, silent: 
 		_animate_for(BattleAttackFlight.DURATION + RECEIVE_FLASH) # the line, then the strip's "new" outline
 		if sender != BattleSession.PLAYER_ID:
 			_alert_until = maxf(_alert_until, clock + BattleAttackFlight.DURATION + WATCH_OUT_HOLD)
+	if sender != BattleSession.PLAYER_ID and target != BattleSession.PLAYER_ID:
+		return # a bot's send at another bot is not drawn (B35-ATTACK-002): no flight, no mark
 	var flight := BattleAttackFlight.new()
 	flight.seq = seq
 	flight.sender = sender
 	flight.target = target
 	flight.kind = kind
 	flight.born = clock
+	flight.duration = BattleAttackFlight.duration_for(sender)
+	flight.linger = 0.0 if sender == BattleSession.PLAYER_ID else BattleAttackFlight.LINGER
 	flights.append(flight)
 	_flight_by_seq[seq] = flight
 	if flights.size() > MAX_FLIGHTS: # never in a real match; the oldest line goes first
@@ -209,20 +212,16 @@ func _on_resolved(seq: int, cause: int, tick: int, silent := false) -> void:
 		if f != null and f.cut_at < 0.0:
 			f.cut_at = clock # the target is out: the line fades instead of landing on a KO
 
-## Drops lines that have finished and recomputes which contestants are marked as targets.
+## Drops flights that have finished.
 func _prune() -> void:
-	_marked.clear()
 	if flights.is_empty():
 		return
 	var kept: Array[BattleAttackFlight] = []
 	for f in flights:
-		var s := f.strength(clock)
-		if s <= 0.0:
+		if f.strength(clock) <= 0.0:
 			_flight_by_seq.erase(f.seq)
 			continue
 		kept.append(f)
-		if s > float(_marked.get(f.target, 0.0)):
-			_marked[f.target] = s
 	flights = kept
 
 # ---- what the screen asks -----------------------------------------------------------------------------
@@ -232,13 +231,23 @@ func _prune() -> void:
 func counts(id: int) -> Vector2i:
 	return Vector2i(_queued[id], _active[id])
 
-## 0..1: how strongly a line currently marks contestant `id` as its target (0 = not at all).
-func target_strength(id: int) -> float:
-	return float(_marked.get(id, 0.0))
+## The real player's sends that are still in the air, oldest first, as copies: {seq, target (the authoritative recipient, fixed when
+## the send was logged: a later mode change never moves it), progress (0 at the window, 1 on the pane, eased), cut (its recipient was
+## eliminated in flight: it fades instead of landing)}. The reticle is exactly these in the air, then the target's own bracket.
+func player_flights() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for f in flights:
+		if f.sender == BattleSession.PLAYER_ID and f.strength(clock) > 0.0:
+			out.append({"seq": f.seq, "target": f.target, "progress": f.eased(clock), "cut": f.cut_at >= 0.0,
+				"fade": f.strength(clock)})
+	return out
 
-## The ids currently marked as a target.
-func marked_ids() -> Array:
-	return _marked.keys()
+## Whether any of the real player's sends is still in the air.
+func player_sending() -> bool:
+	for f in flights:
+		if f.sender == BattleSession.PLAYER_ID and f.strength(clock) > 0.0 and f.cut_at < 0.0:
+			return true
+	return false
 
 ## The phase an attack is in, from its authoritative state and whether its real enemy is in the level.
 static func phase_of(state: int, spawned: bool) -> int:

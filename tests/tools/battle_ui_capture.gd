@@ -245,6 +245,44 @@ func _run() -> void:
 		await frames(4)
 		await grab("07-labels-debug")
 		panes_cls.show_labels = false
+	if wanted.has("11"):
+		# the player's send: the reticle's flight at several moments, then the bot-to-player line (doc 51)
+		var layout_now: Dictionary = screen.layout
+		var target_id := alive_between(18, 34, 5)
+		fixed_target(target_id)
+		await frames(40)
+		screen.game_frozen = true # holds the presentation clock; the moments below are stepped by hand
+		var atk = session.report_enemy_defeat(0, load("res://Scripts/Classes/Battle/BattleEnemyType.gd").Kind.GOOMBA)
+		var elapsed := 0.0
+		for step in [["11a-send-0ms", 0.0], ["11b-send-60ms", 0.06], ["11c-send-120ms", 0.06], ["11d-send-190ms", 0.07], ["11e-send-250ms", 0.06]]:
+			screen.attack_view.update(step[1])
+			elapsed += step[1]
+			screen.refresh()
+			await grab(step[0] + "-window", Rect2(100, 0, 280, 270), 3)
+			await grab(step[0] + "-right", Rect2(372, 0, 108, 270), 3)
+		print("SEND target=", target_id, " flight=", atk.seq)
+		screen.game_frozen = false
+		await frames(60)
+		fixed_target(0)
+		session.report_enemy_defeat(alive_between(1, 17, 6), load("res://Scripts/Classes/Battle/BattleEnemyType.gd").Kind.KOOPA)
+		await frames(14)
+		await grab("11f-bot-to-player-line")
+		await grab("11f-bot-to-player-line-bar", Rect2(0, 190, 480, 80), 2)
+	if wanted.has("10"):
+		# the results: the field must look exactly as it did when the round ended (doc 51)
+		await grab("10a-before-death")
+		get_first_node_in_group("Players").die()
+		var got_results := false
+		for i in 1800:
+			await process_frame
+			if screen.battle_round.state == Round.State.RESULTS:
+				got_results = true
+				break
+		await frames(90)
+		await grab("10b-results")
+		await grab("10b-results-left-panel", Rect2(0, 0, 108, 270), 3)
+		await grab("10b-results-right-panel", Rect2(372, 0, 108, 270), 3)
+		print("RESULTS reached: ", got_results)
 	if wanted.has("8"):
 		await grab("08-window-crop", Rect2(100, 0, 280, 270), 3)
 	if added_pack != "":

@@ -13,7 +13,7 @@ func choose(_session, _sender, _draw) -> int:
 	return target
 """
 const UI_FILES := ["BattleTargetSelector", "BattleHud", "BattleHudText", "BattleHudShapes", "BattleBadge", "BattleBanner",
-	"BattleStatusStrip", "BattleTargetReticle", "BattleOpponentPane", "BattleIncomingStrip"]
+	"BattleStatusStrip", "BattleTargetReticle", "BattleOpponentPane", "BattleIncomingStrip", "BattleAttackLayer", "BattleAttackGeometry", "BattleSendStyle"]
 
 var failures := 0
 var S # BattleSession
@@ -78,6 +78,7 @@ func _run() -> void:
 	test_selector_timeline()
 	test_selector_state_and_geometry()
 	test_reticle()
+	test_attack_visuals_removed()
 	test_incoming_bar_placement()
 	test_incoming_bar_phase_mapping()
 	test_watch_out_and_status()
@@ -221,17 +222,34 @@ func test_reticle() -> void:
 	var wide: Array[Rect2] = RET.corner_rects(slots[0], 2.0)
 	check(wide[0].position.x < one[0].position.x and wide[0].position.y < one[0].position.y, "a punch spreads the bracket outward")
 	var ret = RET.new(layout)
-	check(not ret.visible and ret.target == 0, "no target: no reticle")
+	check(not ret.visible and ret.target == 0 and not ret.has_content(), "no target: no reticle")
 	ret.set_target(5)
-	check(ret.visible and ret.target == 5 and ret.pulse_age == 0.0, "a target shows it, punching as it arrives")
-	ret.advance(0.0)
-	check(ret.pulse_age == 0.0, "paused time does not advance the punch")
-	ret.advance(RET.PULSE_SECONDS + 0.1)
-	check(RET.pulse_amount(ret.pulse_age) == 0.0, "the punch is over in %.1f s" % RET.PULSE_SECONDS)
-	ret.set_target(5)
-	check(ret.pulse_age >= RET.PULSE_SECONDS, "the same target again does not punch")
+	check(ret.visible and ret.target == 5 and ret.persistent_visible() and ret.pulses.is_empty(), "a target shows the bracket on its pane; moving to a pane does not punch (a KO re-target is a plain move)")
+	ret.set_target(7)
+	check(ret.target == 7 and ret.pulses.is_empty(), "the bracket moves at once to the next pane")
 	ret.pulse()
-	check(ret.pulse_age == 0.0 and RET.pulse_amount(0.0) == 1.0, "a mode change punches on the current pane")
+	check(ret.pulses.has(7) and RET.pulse_amount(0.0) == 1.0, "a mode change punches the current pane")
+	ret.advance(0.0)
+	check(is_equal_approx(float(ret.pulses[7]), 0.0), "paused time does not advance the punch")
+	ret.advance(RET.PULSE_SECONDS + 0.1)
+	check(ret.pulses.is_empty() and RET.pulse_amount(RET.PULSE_SECONDS + 0.1) == 0.0, "the punch is over in %.1f s" % RET.PULSE_SECONDS)
+	# the send
+	var flying: Array[Dictionary] = [{"seq": 4, "target": 12, "progress": 0.3, "cut": false, "fade": 1.0}]
+	ret.sync_flights(flying)
+	check(ret.flying.size() == 1 and not ret.persistent_visible() and ret.visible and ret.target == 7, "a send in the air: the bracket is the one flying, the persistent one is not drawn")
+	ret.sync_flights(flying)
+	check(ret.landed.is_empty() and ret.pulses.is_empty(), "nothing lands while it is still in the air")
+	ret.sync_flights([] as Array[Dictionary])
+	check(ret.landed == [12] and ret.pulses.has(12) and ret.persistent_visible(), "when it is gone it has landed: its pane punches, and the persistent bracket is back")
+	ret.sync_flights([] as Array[Dictionary])
+	check(ret.landed.is_empty(), "(a landing is reported once)")
+	var cutting: Array[Dictionary] = [{"seq": 5, "target": 9, "progress": 0.5, "cut": true, "fade": 0.5}]
+	ret.sync_flights(cutting)
+	ret.sync_flights([] as Array[Dictionary])
+	check(ret.landed.is_empty() and not ret.pulses.has(9), "a flight whose recipient went out is cut: it never lands, and nothing punches")
+	ret.sync_flights(flying)
+	ret.clear()
+	check(not ret.visible and ret.target == 0 and ret.flying.is_empty() and ret.pulses.is_empty() and not ret.has_content(), "clearing the reticle leaves nothing: no bracket, no flight, no punch")
 	ret.set_target(0)
 	check(not ret.visible, "no target hides it")
 	ret.set_target(-1)
@@ -240,6 +258,49 @@ func test_reticle() -> void:
 	check(not ret.visible, "an id past the 34 opponents hides it")
 	check(RET.COLOR.r > 225.0 / 255.0 and RET.COLOR.g < 50.0 / 255.0 and RET.COLOR.b < 70.0 / 255.0, "it is the reference's pure red (r>225, g<50, b<70)")
 	ret.free()
+
+# ---- what is no longer drawn ---------------------------------------------------------------------------------
+
+func test_attack_visuals_removed() -> void:
+	print("-- the old attack effects are gone (doc 51)")
+	var LAYER = load("res://Scripts/Classes/Battle/BattleAttackLayer.gd")
+	var s = make_session(0)
+	var pres = P.new(s)
+	s.report_enemy_defeat(0, 1) # the player's send: the reticle flies, no line
+	s.report_enemy_defeat(5, 1) # bot to bot (at the player: the policy sends everything at 0, so use another session below)
+	pres.update(0.0)
+	check(LAYER.drawn_flights(null).is_empty(), "no presentation, no lines")
+	var only_lines := true
+	for f in LAYER.drawn_flights(pres):
+		if f.target != 0 or f.sender == 0:
+			only_lines = false
+	check(only_lines, "the layer draws only a bot's send at the player")
+	var s2 = make_session(9)
+	var p2 = P.new(s2)
+	s2.report_enemy_defeat(3, 1)
+	s2.report_enemy_defeat(4, 2)
+	p2.update(0.0)
+	check(p2.flights.is_empty() and LAYER.drawn_flights(p2).is_empty(), "bot-to-bot sends are neither flights nor lines")
+	var mine = make_session(0)
+	var p3 = P.new(mine)
+	mine.report_enemy_defeat(6, 1)
+	p3.update(0.0)
+	check(LAYER.drawn_flights(p3).size() == 1 and LAYER.drawn_flights(p3)[0].sender == 6, "a bot's send at the player is one line, from that bot")
+	var layer = LAYER.new(layout)
+	for gone in ["_draw_target", "_draw_flight", "_draw_piece"]:
+		check(not layer.has_method(gone), "the layer has no %s any more (gold line, target tint, frame flash, launch ring)" % gone)
+	check(not ("assets" in layer), "and it carries no enemy art (no enemy rides a line)")
+	var pane = PANE.new(3, null)
+	pane.refresh(contestant(true))
+	pane.set_incoming(Vector2i(2, 1))
+	check(not pane.draws_pips(), "a pane with enemies on their way shows no pip")
+	PANE.show_labels = true
+	check(pane.draws_pips(), "...unless the debug labels mode is on")
+	pane.refresh(contestant(false, 20))
+	check(not pane.draws_pips(), "...and never on a KO card")
+	PANE.show_labels = false
+	layer.free()
+	pane.free()
 
 # ---- the incoming bar -----------------------------------------------------------------------------------------------------
 

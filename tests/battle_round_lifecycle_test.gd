@@ -105,6 +105,7 @@ func _run() -> void:
 	await start_battle()
 	await test_pre_round_freezes()
 	await test_death_round()
+	await test_results_field_frozen()
 	await test_timeout_round()
 	await test_win_round()
 	await test_results_input()
@@ -291,6 +292,61 @@ func test_death_round() -> void:
 	old = null # the test's own reference
 	check(old_ref.get_ref() == null, "the previous round's BattleSession is gone")
 	check(scr.driver != null and scr.driver.session == fresh and scr.cells.filter(func(c): return c.is_live()).size() == 34, "the previews follow the fresh session (34 live)")
+
+# ---- the match field under the results (doc 51) ------------------------------------------------------------
+
+## Everything the panes show, as plain values: for every opponent the picture's state and whether it is a KO card, the alive badge,
+## the timer, the order and place of the panes.
+func field_snapshot() -> Dictionary:
+	var scr = screen()
+	var sigs := PackedStringArray()
+	var marked := []
+	var places := []
+	for i in scr.cells.size():
+		sigs.append(scr.cells[i].frame.signature() if scr.cells[i].frame != null else "-")
+		if scr.panes[i].marked:
+			marked.append(scr.panes[i].contestant_id)
+		places.append([scr.panes[i].contestant_id, scr.panes[i].position, scr.panes[i].size])
+	return {"pictures": hash("|".join(sigs)), "marked": marked, "places": places, "badge": scr.badge_alive.value, "time": scr.hud.time_left,
+		"live": scr.cells.filter(func(c): return c.is_live()).size(), "valid": scr.cells.filter(func(c): return c.frame != null and c.frame.valid).size(),
+		"placements": scr.panes.map(func(p): return p.placement)}
+
+func test_results_field_frozen() -> void:
+	print("-- the match field survives ROUND_OVER and RESULTS exactly as it was")
+	var scr = screen()
+	await frames(60 * 14) # some opponents go out
+	var playing := field_snapshot()
+	check(playing.live == 34 and playing.valid == 34 and playing.marked.size() >= 1, "(14 s in: all 34 pictures are live and %d opponents show a KO card)" % playing.marked.size())
+	var s = session()
+	player().die()
+	check(state() == ROUND.State.ROUND_OVER and scr.field_frozen, "the round is over: the field is held from this moment")
+	var over := field_snapshot()
+	check(over.live == 34 and over.valid == 34 and over.places == playing.places, "no picture fell back to a placeholder, and no pane moved, at ROUND_OVER")
+	var kept := true
+	for id in playing.marked:
+		if not over.marked.has(id):
+			kept = false
+	check(kept, "every KO card of the match is still a KO card (%d)" % over.marked.size())
+	var tick_over: int = s.tick_count
+	var got: bool = await results_up()
+	check(got and s.finished and s.tick_count > tick_over, "the results came up and the rest of the match was played out behind them (tick %d -> %d, %d alive left)" % [tick_over, s.tick_count, s.alive_count])
+	await frames(90)
+	var results := field_snapshot()
+	check(results.pictures == over.pictures, "every opponent's picture is exactly the one it showed when the round ended")
+	check(results.marked == over.marked and results.places == over.places and results.placements == over.placements, "the KO cards (and their placements) are the same, and no pane moved or changed")
+	check(results.live == 34 and results.valid == 34, "no pane fell back to the placeholder: all 34 pictures are still live")
+	check(results.badge == over.badge and results.time == over.time, "the alive badge and the timer are held too (%s, %d)" % [results.badge, results.time])
+	check(scr.panes.all(func(p): return not p.is_animating()), "no KO animation is left running")
+	check(scr.target_reticle.flying.is_empty() and not scr.target_reticle.visible and scr.attack_view.flights.is_empty(), "no reticle flight, bracket or line hangs over the results")
+	check(scr._overlay.visible and scr._overlay.get_rect() == scr.layout.game, "the results dim the game window only (the dimming is independent of the field)")
+	# the next round resets everything
+	await next_round()
+	check(not scr.field_frozen and state() == ROUND.State.PRE_ROUND, "the next round releases the field")
+	await play()
+	await frames(10)
+	var fresh := field_snapshot()
+	check(fresh.marked.is_empty() and fresh.badge == "35/35" and fresh.live == 34 and fresh.pictures != results.pictures, "...and shows a new match: no KO card, 35/35, 34 live pictures of the new round")
+	check(fresh.placements.all(func(pl): return pl == 0), "no placement of the old round survives")
 
 # ---- timeout -----------------------------------------------------------------------------------------------
 

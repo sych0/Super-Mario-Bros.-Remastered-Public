@@ -15,10 +15,12 @@ extends Control
 ## round reloads World 1-1 into the same GameViewport. Only Quit leaves Battle, as an ordinary
 ## transition to the title, which frees this screen and, with it, the game scene.
 ##
-## The enemy send / receive loop is made visible here and only here (doc 44): `attack_view` reads the
-## session's attack events into lines (`attack_layer`), markers on the opponent panes, the real player's
-## incoming strip (`incoming_strip`, strip A) and, through the preview driver's tracks, incoming enemies
-## in the opponents' pictures. It never writes to the session; nothing of it reaches the game window.
+## The enemy send / receive loop is made visible here and only here (doc 44, as the reference showed it, doc 51):
+## `attack_view` reads the session's attack events into the reticle's flights (`target_reticle`: the real player's own sends fly
+## from the game window to the recipient's pane), the thin red lines of attacks on the player (`attack_layer`), the real
+## player's incoming bar (`incoming_strip`, strip A) and WATCH OUT!, and, through the preview driver's tracks, incoming enemies
+## in the opponents' pictures. Bot-to-bot sends are not drawn. It never writes to the session; nothing of it reaches the game
+## window. Once the round is over the whole field is held as it was (`field_frozen`).
 
 const TITLE_SCENE := "res://Scenes/Levels/TitleScreen.tscn"
 const FONT_PATH := "res://Resources/ThemedResources/FontMain.tres"
@@ -65,18 +67,22 @@ var cells: Array[BattlePreviewCell] = [] ## 187x240 pictures, in the atlas (inde
 var panes: Array[BattleOpponentPane] = [] ## 32x41 windows on the canvas, each showing its own atlas region
 var driver: BattlePreviewDriver = null ## drives the live previews (all 34 on World 1-1)
 var attack_view: BattleAttackPresentation = null ## the visible side of this session's attack loop (a reader of its events; null when attacks are off)
-var attack_layer: BattleAttackLayer = null ## the lines and target marks over the canvas
+var attack_layer: BattleAttackLayer = null ## the thin red lines of attacks on the real player, over the canvas
 var incoming_strip: BattleIncomingStrip = null ## the real player's incoming enemies, in strip A
 var status_strip: BattleStatusStrip = null ## the eye counter and WATCH OUT!, in strip B
 var hud: BattleHud = null ## coins, item box, timer and selector, inside the window
 var selector: BattleTargetSelector = null ## the four-way targeting selector (hud's child)
 var badge_course: BattleBadge = null
 var badge_alive: BattleBadge = null
-var target_reticle: BattleTargetReticle = null ## the red bracket on the real player's current target pane
+var target_reticle: BattleTargetReticle = null ## the red bracket on the real player's current target pane, and the player's sends in flight
 var debug_view: TextureRect = null ## dev only: opponent #1's atlas cell at native size over the window
 var audio_listener: AudioListener2D = null
 var battle_round := BattleRound.new() ## the round lifecycle; the same object for every round of this Battle
 var game_frozen := false ## the game window is frozen for the pre-round (or a win)
+## The match field (panes, previews, badges, HUD, attack lines) is held exactly as the round ended, from ROUND_OVER on:
+## the results settle the rest of the match in one go (`BattleSession.resolve_to_end`), and the panes must not follow that
+## fast-forward (doc 51). Cleared when the next round starts.
+var field_frozen := false
 var result_text := ""
 var round_others_alive := 0 ## opponents still in when the round ended
 var _font: Font = null
@@ -452,7 +458,7 @@ func _process(delta: float) -> void:
 		# power-up freeze (tree paused), the pre-round and a win hold (window frozen) hold the lines too.
 		attack_view.update(0.0 if presentation_held() else minf(delta, MAX_PRESENTATION_STEP))
 	refresh()
-	if driver != null:
+	if driver != null and not field_frozen:
 		for id in driver.update(BattleHandler.presentation_alpha):
 			cells[id - 1].queue_redraw()
 
@@ -515,31 +521,35 @@ func _bind_attack_view() -> void:
 	attack_layer.bind(attack_view, art)
 	incoming_strip.bind(attack_view, art)
 
-## Everything the attack presentation put on screen goes: lines, marks, pane markers, strip icons.
+## Everything the attack presentation put on screen goes: lines, reticle flights, pane markers, strip icons.
 func _clear_attack_view() -> void:
 	attack_view = null
-	target_reticle.set_target(0)
+	target_reticle.clear()
 	attack_layer.bind(null, null)
 	incoming_strip.bind(null, null)
 	for pane in panes:
 		pane.set_incoming(Vector2i.ZERO)
 
-## Re-reads the session into the cells, panes and labels.
+## Re-reads the session into the cells, panes and labels. Once the round is over (`field_frozen`) the field (cells, panes, badges,
+## HUD, the reticle) keeps what it showed; the incoming bar still follows the session (the round ending clears it, as before).
 func refresh() -> void:
 	if session == null:
 		return
-	for i in cells.size():
-		cells[i].refresh(session.contestants[i + 1])
-		panes[i].refresh(session.contestants[i + 1])
-		if attack_view != null:
-			panes[i].set_incoming(attack_view.counts(i + 1))
+	if not field_frozen:
+		for i in cells.size():
+			cells[i].refresh(session.contestants[i + 1])
+			panes[i].refresh(session.contestants[i + 1])
+			if attack_view != null:
+				panes[i].set_incoming(attack_view.counts(i + 1))
 	if attack_view != null:
 		var art: BattlePreviewAssets = driver.assets if driver != null else null
-		attack_layer.assets = art
 		incoming_strip.assets = art
 	attack_layer.sync()
 	incoming_strip.sync()
+	if field_frozen:
+		return
 	target_reticle.set_target(_reticle_target())
+	target_reticle.sync_flights(attack_view.player_flights() if attack_view != null else [])
 	_refresh_hud()
 
 ## What the window's HUD, the badges and the status strip show, from the session (and the classic game's own coin count
@@ -577,8 +587,9 @@ func _advance_ui(delta: float) -> void:
 
 # ---- the player's target: reticle, mode selection (doc 47 M-T1) -------------------------------------
 
-## The opponent the reticle is on right now (1..34), or 0 for none: only while the round is being set up
-## or played, two or more are in, the player is in, and never on a pane that already shows its KO card.
+## The opponent the persistent bracket is on right now (1..34), or 0 for none: only while the round is being set up
+## or played, two or more are in, the player is in, and never on a pane that already shows its KO card. (While one of the
+## player's sends is in the air the bracket is the one flying: the reticle hides this one itself.)
 func _reticle_target() -> int:
 	if attack_view == null or session == null:
 		return 0
@@ -664,6 +675,26 @@ func _begin_round_over() -> void:
 		round_others_alive = s.alive_count - (1 if s.get_player().alive else 0)
 	if battle_round.end_cause == BattleRound.End.WIN:
 		_set_game_frozen(true) # nothing plays out after a win: hold the picture
+	_freeze_field()
+
+## Holds the match field as it is: one last read of the session (the player's own KO, the last KO cards), then the
+## panes, their previews, the badges, the HUD and the attack lines stop following it. The pictures are what the
+## previews drew last (never a placeholder fallback), a KO card that has settled stays, and an animation that is
+## playing (a KO card popping in) finishes on the screen's own clock.
+func _freeze_field() -> void:
+	if field_frozen:
+		return
+	refresh()
+	field_frozen = true
+	for cell in cells:
+		cell.freeze()
+	for pane in panes:
+		pane.settle() # a KO card that was popping in is at rest (the screen's clock may be paused with the death)
+	target_reticle.clear() # a send in the air is not left hanging over the results
+	status_strip.set_watch_out(false)
+	if attack_view != null:
+		attack_view.clear_flights() # (the player's sends and the red lines in the air)
+	attack_layer.sync()
 
 ## Finishes the match behind the results: the rest of the placements are decided now (the bots play
 ## it out), so the results show a complete ranking. The player's own placement was fixed at their KO.
@@ -682,6 +713,7 @@ func _show_results() -> void:
 func _start_next_round() -> void:
 	_hide_result()
 	_set_game_frozen(false)
+	field_frozen = false
 	for cell in cells:
 		cell.set_live(null, null) # the new session gets its own tracks
 	driver = null

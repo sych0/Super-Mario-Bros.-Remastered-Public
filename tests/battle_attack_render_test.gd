@@ -242,6 +242,27 @@ func red_corners(img: Image, layout: Dictionary, id: int) -> int:
 			n += 1
 	return n
 
+## Whether a pure reticle red lies within one device pixel of the logical point (x, y).
+func red_near(img: Image, x: float, y: float) -> bool:
+	var cx := int(x * shot_scale)
+	var cy := int(y * shot_scale)
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var c := img.get_pixel(clampi(cx + dx, 0, img.get_width() - 1), clampi(cy + dy, 0, img.get_height() - 1))
+			if is_reticle_red(c):
+				return true
+	return false
+
+## How many of the four corner brackets round `pane` (any rectangle: a pane, or the reticle in flight) are drawn: the arm's own middle.
+func red_corners_of_rect(img: Image, pane: Rect2, alpha_ok := false) -> int:
+	var n := 0
+	var rects: Array[Rect2] = load("res://Scripts/Classes/Battle/BattleTargetReticle.gd").corner_rects(pane)
+	for i in range(0, rects.size(), 2):
+		var r: Rect2 = rects[i]
+		if red_near(img, r.position.x + r.size.x * 0.5, r.position.y + r.size.y * 0.5):
+			n += 1
+	return n
+
 func test_target_reticle(layout: Dictionary) -> void:
 	print("-- the target reticle")
 	var t: int = session.target_of(0)
@@ -295,78 +316,85 @@ func test_target_reticle_ko(layout: Dictionary) -> void:
 	check(shown == 1, "exactly one pane has a whole bracket")
 
 func test_player_send(layout: Dictionary, game: Rect2) -> void:
-	print("-- the real player's send")
+	print("-- the real player's send: the reticle flies")
+	await wait_lines_gone()
+	await frames(30)
 	var base := await grab("attack_00_baseline")
 	var target := alive_between(18, 34, 2)
 	fixed_target(target)
+	var old_target: int = session.target_of(0)
 	var a = session.report_enemy_defeat(0, KIND.GOOMBA)
-	var flew: bool = await wait_flight(a.seq, 0.5)
+	var flew: bool = await wait_flight(a.seq, 0.4)
 	var img := await grab("attack_01_player_send")
 	var view = screen.attack_view
+	var ret = screen.target_reticle
 	var f = view.flight_of(a.seq)
-	check(flew and f != null and f.target == target, "the line is in the air towards the authoritative recipient (#%d)" % target)
+	check(flew and f != null and f.target == target and ret.flying.size() == 1 and ret.flying[0].target == target, "the reticle is in the air towards the authoritative recipient (#%d)" % target)
+	var progress: float = float(ret.flying[0].progress)
+	var rect: Rect2 = GEO.send_rect(layout, target, progress)
 	var pane: Rect2 = layout.slots[target - 1]
-	check(changed_fraction(img, base, pane.grow(-2.0)) > 0.5, "that pane is marked: more than half its pixels changed (%.0f %%)" % [changed_fraction(img, base, pane.grow(-2.0)) * 100.0])
-	var other: Rect2 = layout.slots[alive_between(1, 17, 5) - 1]
-	check(changed_fraction(img, base, other.grow(-2.0)) < 0.2, "a pane that is not the target is not marked")
-	# the line itself: sample along it, between the launch point and the head
-	var from: Vector2 = GEO.launch_point(layout, 0, target)
-	var to: Vector2 = GEO.landing_point(layout, 0, target)
-	var e: float = f.eased(view.clock)
-	var hits := 0
+	check(red_corners_of_rect(img, rect) >= 3, "its bracket is drawn on screen where the flight says (%.2f of the way: %d of 4 corners red)" % [progress, red_corners_of_rect(img, rect)])
+	check(progress > 0.1 and progress < 0.95 and game.has_point(rect.get_center()) or progress > 0.5, "...between the window's middle and the pane")
+	check(red_corners_of_rect(img, pane) < 4 and red_corners_of_rect(img, layout.slots[old_target - 1]) < 4, "neither the old target's pane nor the recipient's carries the persistent bracket (it is the one in the air)")
+	check(changed_fraction(img, base, pane.grow(-2.0)) < 0.25, "the recipient pane is not tinted (%.0f %% of its pixels changed)" % [changed_fraction(img, base, pane.grow(-2.0)) * 100.0])
+	# no gold line, no enemy riding it, no frame flash
+	var from: Vector2 = GEO.send_start(layout)
+	var to: Vector2 = pane.get_center()
+	var line_hits := 0
 	for k in range(1, 9):
-		var p := from.lerp(to, e * (0.3 + 0.07 * k))
-		if diff(px(img, p.x, p.y), px(base, p.x, p.y)) > 0.12:
-			hits += 1
-	check(hits >= 6, "the line is drawn along the way from the game window to the pane (%d of 8 samples changed)" % hits)
-	check(game.has_point(from) and not game.has_point(Vector2(from.x, 500)), "and it starts inside the game window")
-	# everything of it is gone once the lines have landed
-	await wait_lines_gone()
-	var after := await grab()
-	check(changed_fraction(after, base, pane.grow(-2.0)) < 0.3, "once it has landed and faded the pane is no longer marked")
-	var ghost := 0
+		var p := from.lerp(to, 0.1 * k)
+		var behind: Vector2 = p.lerp(from, 0.5)
+		if absf(progress - 0.0) > 0.0 and px(img, behind.x, behind.y + 8.0).r > 0.97 and px(img, behind.x, behind.y + 8.0).g > 0.85 and px(img, behind.x, behind.y + 8.0).b < 0.5:
+			line_hits += 1
+	check(line_hits == 0, "no gold line trails behind it (%d gold samples)" % line_hits)
+	var lit := 0
+	for k in 6:
+		var y: float = game.position.y + 30.0 + k * 30.0
+		if px(base, game.position.x - 2.0, y).g - px(img, game.position.x - 2.0, y).g > 0.1:
+			lit += 1
+	check(lit == 0, "the game window's frame does not flash (%d of 6 samples changed)" % lit)
+	# it lands, and one bracket is left
+	await frames(25)
+	var after := await grab("attack_01b_player_send_landed")
+	check(ret.flying.is_empty() and ret.persistent_visible() and ret.target == session.target_of(0) and red_corners_of_rect(after, layout.slots[ret.target - 1]) == 4, "it has landed: one bracket, on the session's target (#%d)" % ret.target)
+	var stray := 0
 	for k in range(1, 9):
 		var p := from.lerp(to, 0.1 * k)
 		if not game.has_point(p) and diff(px(after, p.x, p.y), px(base, p.x, p.y)) > 0.2:
-			ghost += 1
-	check(ghost <= 1, "and no line is left on the screen (%d stray samples)" % ghost)
+			stray += 1
+	check(stray <= 1, "and nothing is left on the screen along its way (%d stray samples)" % stray)
 
 func test_bot_send(layout: Dictionary, game: Rect2) -> void:
-	print("-- a bot's send")
+	print("-- a bot's send at another bot: nothing is drawn")
 	await wait_lines_gone()
+	await frames(30)
 	var base := await grab()
 	var sender := alive_between(1, 17, 4)
 	var target := alive_between(18, 34, 8)
 	fixed_target(target)
 	var a = session.report_enemy_defeat(sender, KIND.KOOPA)
-	await wait_flight(a.seq, 0.6)
+	await frames(8)
 	var img := await grab("attack_02_bot_send")
 	var view = screen.attack_view
-	var f = view.flight_of(a.seq)
-	check(f != null and f.sender == sender and f.target == target, "the line runs from bot #%d to bot #%d" % [sender, target])
+	check(view.flight_of(a.seq) == null and view.flights.is_empty() and screen.target_reticle.flying.is_empty(), "the send makes no flight and no reticle")
 	var pane: Rect2 = layout.slots[target - 1]
-	check(changed_fraction(img, base, pane.grow(-2.0)) > 0.5, "the target pane is marked")
-	var from: Vector2 = GEO.launch_point(layout, sender, target)
-	var to: Vector2 = GEO.landing_point(layout, sender, target)
-	var e: float = f.eased(view.clock)
-	var span: Vector2 = GEO.inside_span(from, to, game)
-	check(span.x < span.y, "(this line crosses the player's playfield)")
-	var outside := 0.0
-	var outside_n := 0
-	var inside := 0.0
-	var inside_n := 0
+	check(changed_fraction(img, base, pane.grow(-2.0)) < 0.25, "the target pane is not marked")
+	var from: Vector2 = GEO.center_of(layout, sender)
+	var to: Vector2 = GEO.center_of(layout, target)
+	var drawn := 0
 	for k in range(1, 40):
-		var t := e * k / 40.0
-		var p := from.lerp(to, t)
-		var d := diff(px(img, p.x, p.y), px(base, p.x, p.y))
-		if t >= span.x and t <= span.y:
-			inside += d
-			inside_n += 1
-		elif t < span.x:
-			outside += d
-			outside_n += 1
-	check(outside_n > 3 and inside_n > 3 and outside / outside_n > 0.12, "where it runs between the panes it is drawn clearly (mean change %.2f)" % (outside / maxi(outside_n, 1)))
-	check(inside_n > 3 and inside / inside_n < outside / maxi(outside_n, 1) * 0.75 and inside / inside_n > 0.01, "and across the game window it is only faint (mean change %.2f against %.2f)" % [inside / maxi(inside_n, 1), outside / maxi(outside_n, 1)])
+		var p := from.lerp(to, k / 40.0)
+		if game.has_point(p) or pane.has_point(p) or (layout.slots[sender - 1] as Rect2).has_point(p):
+			continue
+		if diff(px(img, p.x, p.y), px(base, p.x, p.y)) > 0.3:
+			drawn += 1
+	check(drawn <= 2, "and no line runs between the two panes (%d changed samples along it)" % drawn)
+	var inside := 0
+	for k in range(1, 40):
+		var p := from.lerp(to, k / 40.0)
+		if game.has_point(p) and diff(px(img, p.x, p.y), px(base, p.x, p.y)) > 0.3:
+			inside += 1
+	check(inside <= 2, "nor across the player's playfield (%d changed samples)" % inside)
 	await wait_lines_gone()
 
 func test_incoming_in_preview(layout: Dictionary) -> void:
@@ -387,8 +415,8 @@ func test_incoming_in_preview(layout: Dictionary) -> void:
 	var halo := halo_pixels(img, pane)
 	check(halo > halo_before + 150, "its pane shows a halo and a marker around it (%d red / pink pixels against %d before)" % [halo, halo_before])
 	var pip := px(img, pane.end.x - 5.0 + 1.5, pane.position.y + 3.5)
-	check(pip.r > 0.9 and pip.g < 0.3 and pip.b < 0.3, "a red pip in the pane's corner counts the ACTIVE enemy (%s)" % pip.to_html(false))
-	check(screen.panes[target - 1].incoming == Vector2i(0, 1), "(the pane's own count is 0 queued / 1 active)")
+	check(not (pip.r > 0.9 and pip.g < 0.3 and pip.b < 0.3), "no red pip sits in the pane's corner any more: SMB35 shows no marker (%s)" % pip.to_html(false))
+	check(screen.panes[target - 1].incoming == Vector2i(0, 1) and not screen.panes[target - 1].draws_pips(), "(the pane's own count is still 0 queued / 1 active)")
 	# several, all at once: a Goomba, a Koopa and a Goomba active together
 	advance(10) # (the first one has ended)
 	await frames(5)
@@ -407,7 +435,7 @@ func test_incoming_in_preview(layout: Dictionary) -> void:
 		var c := px(img2, pane.end.x - 5.0 + 1.5 - 4.0 * i, pane.position.y + 3.5)
 		if c.r > 0.9 and c.g < 0.3 and c.b < 0.3:
 			pips += 1
-	check(pips == 3 and screen.panes[target - 1].incoming == Vector2i(0, 3), "three pips, one per ACTIVE enemy (%d)" % pips)
+	check(pips == 0 and screen.panes[target - 1].incoming == Vector2i(0, 3), "three ACTIVE enemies, and still no pip (%d red samples)" % pips)
 	# and it all ends with the attacks: Goomba at 5 s, Koopa at 7 s after activation
 	advance(14)
 	await frames(10)
@@ -433,7 +461,7 @@ func test_player_incoming(layout: Dictionary, game: Rect2) -> void:
 		seqs.append(session.report_enemy_defeat(alive_between(1, 34, 3 + i * 5), KIND.KOOPA if i == 0 else KIND.GOOMBA).seq)
 	await wait_flight(seqs[3], 0.3)
 	var img := await grab("attack_05_incoming_on_player_flights")
-	# the game window's frame lights up (red) while the attacks land on it
+	# the game window's frame does NOT light up (SMB35 does not flash it)
 	var lit := 0
 	for k in 6:
 		var y: float = game.position.y + 30.0 + k * 30.0
@@ -441,7 +469,24 @@ func test_player_incoming(layout: Dictionary, game: Rect2) -> void:
 		var b := px(base, game.position.x - 2.0, y)
 		if b.g - c.g > 0.1:
 			lit += 1
-	check(lit >= 4, "the game window's frame lights up red while attacks land on it (%d of 6 samples)" % lit)
+	check(lit == 0, "the game window's frame does not flash red while attacks land (%d of 6 samples)" % lit)
+	# thin red lines, one per sender, from the sender's own pane into the incoming bar
+	var drawn_lines: Array = load("res://Scripts/Classes/Battle/BattleAttackLayer.gd").drawn_flights(screen.attack_view)
+	var line_ok := drawn_lines.size() == 4
+	for fl in drawn_lines:
+		var a_pt: Vector2 = GEO.launch_point(layout, fl.sender, 0)
+		var b_pt: Vector2 = GEO.landing_point(layout, fl.sender, 0)
+		var head: Vector2 = a_pt.lerp(b_pt, fl.eased(screen.attack_view.clock))
+		var red_samples := 0
+		for k in range(1, 7):
+			var p := a_pt.lerp(head, k / 7.0)
+			if red_near(img, p.x, p.y):
+				red_samples += 1
+		if red_samples < 4:
+			line_ok = false
+		if not (layout.slots[fl.sender - 1] as Rect2).has_point(a_pt):
+			line_ok = false
+	check(line_ok, "each of the four attacks is a thin solid red line from its sender's pane towards the incoming bar")
 	var strip: Rect2 = layout.strip_a
 	# M6b (sampled in the column just left of the enemy's little picture, on the icon's own fill): while their lines are in the air the four icons are hollow place-holders (dark inside); once the lines land they are dim (QUEUED)
 	var hollow := 0
@@ -517,10 +562,14 @@ func test_stress() -> void:
 	await frames(2)
 	var img := await grab("attack_06_stress")
 	var in_air: int = screen.attack_view.flights.size()
-	check(sent >= 12 and in_air >= sent - 2, "every one of %d simultaneous sends is a line in the air at once (%d lines)" % [sent, in_air])
+	var presented := 0
+	for f in screen.attack_view.flights:
+		if f.sender == 0 or f.target == 0:
+			presented += 1
+	check(sent >= 12 and in_air == presented and in_air <= sent, "of %d simultaneous sends only the ones that involve the real player are in the air (%d flights): bot-to-bot sends draw nothing" % [sent, in_air])
 	await frames(10)
 	var per_draw: float = float(layer.stat_draw_us) / maxi(layer.stat_draws, 1)
-	check(layer.stat_draws > 5 and per_draw < 10000.0, "recording all those lines costs %.0f us a frame (limit 10 ms)" % per_draw)
+	check(per_draw < 10000.0, "drawing what is left costs %.0f us a frame (limit 10 ms; the old line pile-up cost about 5 draws a line)" % per_draw)
 	var invaders := 0
 	for id in screen.driver.tracks:
 		invaders += screen.driver.tracks[id].invaders.size()

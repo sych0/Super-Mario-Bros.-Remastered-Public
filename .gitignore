@@ -13,3 +13,10 @@ Exports/
 Assets/LevelGuides
 addons/discord-rpc-gd/bin/windows/~discord_game_sdk_binding_debug.dll
 godotgif/bin/~godotgif.windows.template_debug.x86_64.dll
+
+# The SMB35 reference video stays on the machine that has it (doc 47 section 0.1); so do measurements' working files
+/reference.mp4
+*.mp4
+/tools/reference/out/
+/tools/reference/frames/
+__pycache__/

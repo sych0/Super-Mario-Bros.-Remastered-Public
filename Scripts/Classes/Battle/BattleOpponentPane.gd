@@ -5,9 +5,9 @@ extends Control
 ## that must stay sharp on top of it: the hairline outline, the KO card and the incoming markers. A view only: it
 ## reads the contestant and its BattlePreviewCell and owns no match state.
 ##
-## The live pane carries no text (doc 47 B35-PREVIEW-001: no id, no course): the contestant number and the "W-L" course
-## text are debug labels, shown only when `show_labels` is on (SMB1R_BATTLE_LABELS=1, `--battle-labels`, or F3 on the
-## Battle screen).
+## The live pane carries no text and no marker (doc 47 B35-PREVIEW-001: no id, no course; B35-ATTACK-002: no incoming pips): the
+## contestant number, the "W-L" course text and the queued/active pips are debug labels, shown only when `show_labels` is on
+## (SMB1R_BATTLE_LABELS=1, `--battle-labels`, or F3 on the Battle screen).
 ##
 ## The KO card (B35-KO-001/002): when the preview shows the contestant's KO (`marked`) the pane plays a pane-local
 ## animation of KO_SECONDS, then rests as the card: a white flash, the blue card popping in from the middle with
@@ -125,9 +125,20 @@ func refresh(c: BattleContestant) -> void:
 		_signature = sig
 		overlay.queue_redraw()
 
+## Whether the queued/active pips are drawn: SMB35 shows no incoming marker on a pane (doc 47 B35-ATTACK-002, B35-UI-002), so only
+## the debug labels mode shows them, and never on a KO card.
+func draws_pips() -> bool:
+	return show_labels and not marked
+
 ## Whether the KO animation is still playing.
 func is_animating() -> bool:
 	return marked and ko_age < KO_SECONDS
+
+## Ends a KO animation that is still playing: the card is at rest (the round is over, the field is held).
+func settle() -> void:
+	if is_animating():
+		ko_age = KO_SECONDS
+		overlay.queue_redraw()
 
 ## Advances the KO animation (the screen's clock; not called while the game is paused).
 func advance(delta: float) -> void:
@@ -184,7 +195,7 @@ func _draw_overlay() -> void:
 		BattleHudText.draw(overlay, font, "%02d" % contestant_id, Vector2(1.5, 1.5), 0.6, TEXT_COLOR, OUTLINE, 0.5)
 		if not marked:
 			BattleHudText.draw(overlay, font, world_level_text(), Vector2(1.5, size.y - 6.0), 0.6, TEXT_COLOR, OUTLINE, 0.5)
-	if not marked:
+	if draws_pips():
 		_draw_pips()
 
 ## The KO card at `age_` seconds into its animation: flashes over, the card (scaled from the middle) under them, puffs

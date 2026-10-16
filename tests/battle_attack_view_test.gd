@@ -73,7 +73,7 @@ func _run() -> void:
 	layout = LAYOUT.compute()
 
 	test_geometry()
-	test_window_span()
+	test_send_rect()
 	test_flights_from_sends()
 	test_simultaneous_sends()
 	test_counts_follow_the_session()
@@ -144,21 +144,7 @@ func test_geometry() -> void:
 		if rect != layout.slots[id - 1] or GEO.center_of(layout, id) != rect.get_center():
 			ok_pane = false
 	check(ok_pane, "an opponent's end of a line is the middle of its own pane (all 34)")
-	check(GEO.rect_of(layout, 0) == game, "the real player's end of a line is the game window")
-	var inside := true
-	var faces := true
-	for id in range(1, 35):
-		var from: Vector2 = GEO.launch_point(layout, 0, id)
-		if not game.has_point(from) or not game.grow(-1.0).has_point(from):
-			inside = false
-		var pane_left: bool = GEO.center_of(layout, id).x < game.get_center().x
-		if (from.x < game.get_center().x) != pane_left:
-			faces = false
-		var to: Vector2 = GEO.landing_point(layout, 0, id)
-		if not (layout.slots[id - 1] as Rect2).has_point(to):
-			inside = false
-	check(inside, "a line from the player leaves from inside the game window and ends inside the target's pane (all 34 targets)")
-	check(faces, "it leaves on the side of the window that the target's panel is on")
+	check(GEO.rect_of(layout, 0) == game, "the real player's end is the game window")
 	var enters := true
 	for id in range(1, 35):
 		var from: Vector2 = GEO.launch_point(layout, id, 0)
@@ -168,34 +154,37 @@ func test_geometry() -> void:
 			enters = false
 		if (to.x < bar.get_center().x) != (GEO.center_of(layout, id).x < bar.get_center().x):
 			enters = false
-	check(enters, "a line to the player starts inside the sender's pane and ends inside the incoming bar, at its end on the sender's side (all 34)")
-	var bb: Vector2 = GEO.launch_point(layout, 3, 20)
-	check((layout.slots[2] as Rect2).has_point(bb) and (layout.slots[19] as Rect2).has_point(GEO.landing_point(layout, 3, 20)),
-		"a bot-to-bot line runs from the sender's pane (#3) to the target's pane (#20)")
-	var above := true
-	for id in range(1, 35):
-		var from: Vector2 = GEO.launch_point(layout, 0, id)
-		if from.y < game.position.y + GEO.WINDOW_MARGIN_TOP - 0.01 or from.y > game.end.y - GEO.WINDOW_MARGIN_BOTTOM + 0.01:
-			above = false
-	check(above, "a line from the player never starts in the window's HUD band or on its ground")
+	check(enters, "a red line to the player starts inside the sender's pane and ends inside the incoming bar, at its end on the sender's side (all 34)")
+	check(GEO.send_start(layout) == game.get_center() and GEO.send_start(layout) == Vector2(240, 120), "the player's reticle starts at the middle of the game window (240, 120)")
 
-func test_window_span() -> void:
-	print("-- the part of a line inside the game window")
+func test_send_rect() -> void:
+	print("-- the reticle's flight geometry")
 	var game: Rect2 = layout.game
-	var across: Vector2 = GEO.inside_span(GEO.center_of(layout, 30), GEO.center_of(layout, 1), game)
-	check(across.x < across.y and across.x > 0.0 and across.y < 1.0, "a line from the right panel to the left one crosses the window for part of its length (%.2f..%.2f)" % [across.x, across.y])
-	var a: Vector2 = GEO.center_of(layout, 30)
-	var b: Vector2 = GEO.center_of(layout, 1)
-	var p0: Vector2 = a.lerp(b, across.x)
-	var p1: Vector2 = a.lerp(b, across.y)
-	check(absf(p0.x - game.end.x) < 0.01 and absf(p1.x - game.position.x) < 0.01, "it enters at the window's right edge and leaves at its left edge")
-	var same_side: Vector2 = GEO.inside_span(GEO.center_of(layout, 1), GEO.center_of(layout, 5), game)
-	check(same_side.x > same_side.y, "a line between two panes of the same panel never enters the window")
-	var inward: Vector2 = GEO.inside_span(GEO.center_of(layout, 3), GEO.launch_point(layout, 0, 3), game)
-	check(inward.x <= inward.y and inward.y == 1.0, "a line that ends inside the window is inside it from where it enters to its end")
-	var vertical: Vector2 = GEO.inside_span(Vector2(game.get_center().x, -50.0), Vector2(game.get_center().x, 400.0), game)
-	var miss: Vector2 = GEO.inside_span(Vector2(50.0, -50.0), Vector2(50.0, 400.0), game)
-	check(vertical.x < vertical.y and miss.x > miss.y, "a vertical line through the window is clipped, and a parallel one beside it is empty (no division by zero)")
+	var ok := true
+	var straight := true
+	var same_size := true
+	for id in range(1, 35):
+		var pane: Rect2 = layout.slots[id - 1]
+		var r0: Rect2 = GEO.send_rect(layout, id, 0.0)
+		var r1: Rect2 = GEO.send_rect(layout, id, 1.0)
+		if not r0.get_center().is_equal_approx(game.get_center()) or not r1.is_equal_approx(pane):
+			ok = false
+		var prev := -1.0
+		for k in 11:
+			var r: Rect2 = GEO.send_rect(layout, id, k / 10.0)
+			if not r.size.is_equal_approx(pane.size):
+				same_size = false
+			# the centre stays on the straight line from the window's middle to the pane's middle, moving forward only
+			var d: Vector2 = pane.get_center() - game.get_center()
+			var t: float = (r.get_center() - game.get_center()).dot(d) / d.length_squared()
+			var off: float = absf((r.get_center() - game.get_center()).cross(d.normalized()))
+			if t < prev - 1e-6 or off > 0.001:
+				straight = false
+			prev = t
+	check(ok, "a send starts centred on the window's middle and ends exactly on the recipient's pane (all 34)")
+	check(straight, "its path is the straight line between them, moving only forward")
+	check(same_size, "the bracket keeps the pane's own size all the way (the size in flight is not measured)")
+	check(GEO.send_rect(layout, 3, -1.0) == GEO.send_rect(layout, 3, 0.0) and GEO.send_rect(layout, 3, 2.0) == GEO.send_rect(layout, 3, 1.0), "progress outside 0..1 is clamped")
 
 # ---- flights from sends ------------------------------------------------------------------------------
 
@@ -210,21 +199,22 @@ func test_flights_from_sends() -> void:
 	var f = pres.flights[0]
 	check(f.seq == a.seq and f.sender == 0 and f.target == a.target and f.target == 9 and f.kind == GOOMBA,
 		"it targets the authoritative recipient (#%d), with the real enemy type and the attack's sequence id" % f.target)
+	check(near_eq(f.duration, F.SEND_SECONDS) and f.linger == 0.0 and near_eq(F.SEND_SECONDS, 0.25), "it is the reticle's flight: %.2f s, and nothing lingers after it lands" % f.duration)
 	check(pres.records[a.seq].sender == 0 and pres.records[a.seq].target == 9 and pres.records[a.seq].state == A.State.QUEUED,
 		"the record of the attack starts QUEUED")
 	check(pres.counts(9) == Vector2i(1, 0), "the target's queued count is 1")
-	check(pres.target_strength(9) == 1.0 and pres.marked_ids() == [9], "the authoritative recipient (and only it) is marked as the target")
-	var from: Vector2 = GEO.launch_point(layout, f.sender, f.target)
-	var to: Vector2 = GEO.landing_point(layout, f.sender, f.target)
-	check((layout.game as Rect2).has_point(from) and (layout.slots[8] as Rect2).has_point(to),
-		"the line runs from the game window to the target's pane")
-	# a bot sends to a bot
+	var in_air: Array = pres.player_flights()
+	check(in_air.size() == 1 and in_air[0].seq == a.seq and in_air[0].target == 9 and in_air[0].progress == 0.0 and not in_air[0].cut and pres.player_sending(), "it is the player's flight in the air, at its start")
+	pres.update(F.SEND_SECONDS * 0.5)
+	in_air = pres.player_flights()
+	check(in_air.size() == 1 and in_air[0].progress > 0.5 and in_air[0].progress < 1.0, "half way through, the eased progress is past half (%.2f: it leaves fast)" % in_air[0].progress)
+	pres.update(F.SEND_SECONDS * 0.5 + 0.001)
+	check(pres.player_flights().is_empty() and not pres.player_sending() and pres.flights.is_empty(), "after %.2f s it has landed and nothing is left (no tint, no line)" % F.SEND_SECONDS)
+	# a bot sends to a bot: not presented at all (B35-ATTACK-002)
 	var b = s.report_enemy_defeat(5, KOOPA)
 	pres.update(0.0)
-	var g = pres.flight_of(b.seq)
-	check(g != null and g.sender == 5 and g.target == 9 and g.kind == KOOPA, "a bot-to-bot send is a flight from the sender's pane #5 to the recipient #9")
-	check((layout.slots[4] as Rect2).has_point(GEO.launch_point(layout, g.sender, g.target)) and (layout.slots[8] as Rect2).has_point(GEO.landing_point(layout, g.sender, g.target)),
-		"its ends are in the sender's and the recipient's panes")
+	check(b != null and pres.flight_of(b.seq) == null and pres.flights.is_empty(), "a bot-to-bot send is not drawn: no flight is made for it")
+	check(pres.records[b.seq].sender == 5 and pres.records[b.seq].target == 9 and pres.counts(9) == Vector2i(2, 0), "...but it is still recorded and counted (the previews show it)")
 	# a bot sends to the real player
 	var s2 = make_session(7, 0)
 	var pres2 = P.new(s2)
@@ -232,9 +222,10 @@ func test_flights_from_sends() -> void:
 	pres2.update(0.0)
 	var h = pres2.flights[0]
 	check(h.seq == c.seq and h.sender == 4 and h.target == 0, "an attack on the real player is a flight from the sender's pane to the player")
+	check(near_eq(h.duration, F.DURATION) and h.linger == F.LINGER, "it is the red line: %.2f s and a short linger" % h.duration)
 	check((layout.strip_a as Rect2).has_point(GEO.landing_point(layout, h.sender, h.target)) and pres2.counts(0) == Vector2i(1, 0),
 		"it ends in the incoming bar, and the player's queued count is 1")
-	check(pres2.marked_ids() == [0], "the real player is the marked target")
+	check(pres2.player_flights().is_empty(), "(it is not one of the player's flights)")
 	# nothing to send, nothing to show
 	var s3 = make_session(7, 0)
 	s3.attacks.enabled = true
@@ -243,6 +234,9 @@ func test_flights_from_sends() -> void:
 	var none = s3.report_enemy_defeat(1, GOOMBA)
 	pres3.update(0.0)
 	check(none == null and pres3.flights.is_empty(), "a defeat that sends nothing (the defeater is out) shows nothing")
+
+func near_eq(a: float, b: float) -> bool:
+	return absf(a - b) < 1e-6
 
 func test_simultaneous_sends() -> void:
 	print("-- simultaneous sends")
@@ -254,7 +248,8 @@ func test_simultaneous_sends() -> void:
 		if atk != null:
 			sent.append(atk)
 	pres.update(0.0)
-	check(sent.size() == 13 and pres.flights.size() == 13, "13 sends in the same moment are 13 flights (%d)" % pres.flights.size())
+	var shown: Array = sent.filter(func(a): return a.sender == 0 or a.target == 0) # only what involves the real player is drawn
+	check(sent.size() == 13 and shown.size() >= 1 and pres.flights.size() == shown.size(), "13 sends in the same moment: the %d that involve the real player are flights (%d), the rest are not drawn" % [shown.size(), pres.flights.size()])
 	var seqs := {}
 	var exact := true
 	for f in pres.flights:
@@ -262,26 +257,33 @@ func test_simultaneous_sends() -> void:
 		var truth: Dictionary = s.attacks.attack_history()[f.seq]
 		if f.sender != truth.sender or f.target != truth.target or f.kind != truth.kind:
 			exact = false
-	check(seqs.size() == 13 and exact, "each flight is distinct by sequence id and matches its authoritative attack exactly")
+	check(seqs.size() == shown.size() and exact, "each flight is distinct by sequence id and matches its authoritative attack exactly")
+	var ordered := true
+	for k in range(1, pres.flights.size()):
+		if pres.flights[k].seq <= pres.flights[k - 1].seq:
+			ordered = false
+	check(ordered, "and they are kept in send order")
 	var counts_ok := true
 	for id in 35:
 		if pres.counts(id) != auth_counts(s, id):
 			counts_ok = false
 	check(counts_ok, "every contestant's queued / active counts equal the authoritative queue")
 	# flights are independent: a later one does not disturb the ones already in the air, and each ends on its own
-	pres.update(0.30)
-	var late = s.report_enemy_defeat(14, KOOPA)
+	pres.update(0.10)
+	var late = s.report_enemy_defeat(0, KOOPA) # a second send by the player while the first is still flying
 	pres.update(0.0)
-	var first = pres.flight_of(sent[0].seq)
+	var first = pres.flight_of(sent[0].seq) # sent[0] is the player's own send (id 0)
 	var last = pres.flight_of(late.seq)
-	check(first != null and last != null and first.born == 0.0 and absf(last.born - 0.30) < 1e-6, "flights keep their own start times (%.2f, %.2f)" % [first.born, last.born])
+	check(first != null and last != null and first.born == 0.0 and absf(last.born - 0.10) < 1e-6, "flights keep their own start times (%.2f, %.2f)" % [first.born, last.born])
 	check(first.seq == sent[0].seq and first.target == sent[0].target and last.seq == late.seq, "and their own attack")
-	pres.update(0.6) # the first 13 are past their travel (0.55) and linger (0.3); the late one, launched 0.3 s later, is not
+	var both: Array = pres.player_flights()
+	check(both.size() == 2 and both[0].seq == first.seq and both[1].seq == last.seq and both[0].target == first.target and both[1].target == late.target, "both of the player's sends are in the air, in send order, each to its own recipient")
+	pres.update(0.2) # the first, 0.25 s long, has landed; the late one, 0.1 s younger, has not
 	check(pres.flight_of(sent[0].seq) == null and pres.flight_of(late.seq) != null, "an old flight ends without taking a newer one with it")
 	pres.update(1.0)
-	check(pres.flights.is_empty() and pres.marked_ids().is_empty(), "everything is gone when the last line has landed and faded")
+	check(pres.flights.is_empty(), "everything is gone when the last line has landed and faded")
 	check(pres.records.size() == 14 and pres.records[late.seq].kind == KOOPA, "the records of all 14 attacks remain, by sequence id")
-	var many = make_session(3)
+	var many = make_session(3, 0) # every send is at the real player: every one is a line
 	var big = P.new(many)
 	for i in 300:
 		many.report_enemy_defeat(1 + i % 34, GOOMBA)
@@ -371,7 +373,7 @@ func test_target_out_and_round_end() -> void:
 	check(pres.records[a.seq].state == A.State.RESOLVED and pres.records[a.seq].cause == R.TARGET_OUT, "the record is resolved by the authoritative TARGET_OUT")
 	check(pres.counts(4) == Vector2i.ZERO, "the eliminated bot has nothing queued or active")
 	pres.update(0.2)
-	check(pres.flights.is_empty() and pres.target_strength(4) == 0.0 and pres.marked_ids().is_empty(), "the line has faded away and nothing is marked any more")
+	check(pres.flights.is_empty() and pres.player_flights().is_empty(), "the flight has faded away and nothing is left")
 	# attacks that were ACTIVE on it too
 	var s2 = make_session(6, 8)
 	var p2 = P.new(s2)
@@ -409,9 +411,9 @@ func test_late_creation() -> void:
 	pres.update(0.0)
 	check(pres.flights.is_empty(), "attacks that already happened draw no lines")
 	check(pres.counts(3) == auth_counts(s, 3) and pres.counts(3) == Vector2i(1, 2), "but the counts are right (queued %s, active %s)" % [pres.counts(3).x, pres.counts(3).y])
-	var d = s.report_enemy_defeat(5, GOOMBA)
+	var d = s.report_enemy_defeat(0, GOOMBA)
 	pres.update(0.0)
-	check(pres.flights.size() == 1 and pres.flights[0].seq == d.seq, "a new send after that is a flight")
+	check(pres.flights.size() == 1 and pres.flights[0].seq == d.seq, "a new send by the player after that is a flight")
 	check(a.seq != b.seq and pres.records.size() == 4, "the records cover all four attacks")
 
 # ---- read only ---------------------------------------------------------------------------------------
@@ -487,8 +489,8 @@ func run_signature(seed_value: int, delta: float) -> Array:
 		var line := PackedStringArray()
 		for f in pres.flights:
 			line.append("%d>%d:%d@%.3f/%.3f" % [f.seq, f.target, f.kind, f.born, f.strength(pres.clock)])
-		for id in pres.marked_ids():
-			line.append("m%d=%.3f" % [id, pres.target_strength(id)])
+		for pf in pres.player_flights():
+			line.append("p%d>%d=%.3f" % [pf.seq, pf.target, pf.progress])
 		states.append("|".join(line) + "#" + str(pres.player_incoming().size()))
 	return [pres.signature(), "\n".join(pres.trace), "\n".join(states)]
 
@@ -551,6 +553,23 @@ func test_flight_timing() -> void:
 	check(F.DURATION <= 0.6, "it is brief (%.2f s)" % F.DURATION)
 	f.cut_at = 2.2
 	check(f.strength(2.2) == 1.0 and f.finished(2.2 + F.CUT_FADE + 0.01), "a cut flight fades within %.2f s" % F.CUT_FADE)
+	# the player's reticle flight
+	var r = F.new()
+	r.sender = 0
+	r.born = 5.0
+	r.duration = F.SEND_SECONDS
+	r.linger = 0.0
+	check(r.travel(5.0) == 0.0 and near_eq(r.travel(5.0 + F.SEND_SECONDS), 1.0) and r.eased(5.0) == 0.0 and near_eq(r.eased(5.0 + F.SEND_SECONDS), 1.0), "the reticle flight goes from 0 to 1 in %.2f s" % F.SEND_SECONDS)
+	var forward := true
+	var last_e := 0.0
+	for k in 40:
+		var e: float = r.eased(5.0 + F.SEND_SECONDS * k / 39.0)
+		if e < last_e - 1e-9:
+			forward = false
+		last_e = e
+	check(forward and r.eased(5.0 + F.SEND_SECONDS * 0.5) > 0.5, "it only moves forward, leaving fast and settling (the easing is BattleSendStyle's)")
+	check(r.strength(5.0 + F.SEND_SECONDS) == 1.0 and r.strength(5.0 + F.SEND_SECONDS + 0.001) == 0.0 and r.finished(5.0 + F.SEND_SECONDS + 0.001), "it is gone the moment it lands: no linger, no tint")
+	check(F.SEND_SECONDS >= 0.2 and F.SEND_SECONDS <= 0.3, "doc 47 B35-TARGET-003: it lands within 0.2-0.3 s")
 
 # ---- incoming enemies in a preview -------------------------------------------------------------------
 

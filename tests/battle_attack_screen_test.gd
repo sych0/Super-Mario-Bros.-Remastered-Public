@@ -146,6 +146,7 @@ func _run() -> void:
 	await test_panes_and_previews()
 	await test_player_incoming_ui()
 	await test_ui_fidelity()
+	await test_send_flight_rules()
 	await test_round_restart()
 	await test_attacks_off()
 	await test_classic()
@@ -283,9 +284,10 @@ func BattleTargeting_Mode():
 # ---- the real player's send ------------------------------------------------------------------------------------
 
 func test_player_send() -> void:
-	print("-- the real player sends an enemy")
+	print("-- the real player sends an enemy: the reticle flies")
 	var sc = screen()
 	var s = session()
+	var ret = sc.target_reticle
 	var target := alive_bot(4)
 	fixed_target(target)
 	var goombas := enemies(GOOMBA_SCRIPT)
@@ -296,28 +298,35 @@ func test_player_send() -> void:
 	check(view.flights.size() == 1 and view.flights[0].seq == a.seq and view.flights[0].sender == 0, "a real stomp becomes one flight, from the real player, with the attack's sequence id")
 	check(view.flights[0].target == a.target and a.target == target and view.flights[0].kind == TYPES.Kind.GOOMBA,
 		"it is aimed at the authoritative recipient (#%d) and carries a Goomba" % target)
-	check(view.marked_ids() == [target] and view.target_strength(target) > 0.9, "that opponent's pane is the marked target")
 	await process_frame
-	check(sc.target_reticle.target == target and sc.target_reticle.visible, "and the reticle is on it: the player's target is the recipient of the send")
-	var layer_rect: Rect2 = sc.layout.slots[target - 1]
-	var landing: Vector2 = load("res://Scripts/Classes/Battle/BattleAttackGeometry.gd").landing_point(sc.layout, 0, target)
-	check(layer_rect.has_point(landing) and sc.attack_layer.view == view, "the layer draws its line to a point inside that pane")
+	check(ret.flying.size() == 1 and ret.flying[0].seq == a.seq and ret.flying[0].target == target and ret.visible, "the reticle is in the air towards that pane")
+	check(not ret.persistent_visible() and ret.target == target, "...so the bracket is not also sitting on a pane (it is the one flying)")
+	var geo = load("res://Scripts/Classes/Battle/BattleAttackGeometry.gd")
+	var r_in_air: Rect2 = geo.send_rect(sc.layout, target, float(ret.flying[0].progress))
+	check(sc.layout.game.get_center().distance_to(r_in_air.get_center()) < sc.layout.game.get_center().distance_to((sc.layout.slots[target - 1] as Rect2).get_center()), "and it is between the window's middle and the pane")
+	check(BattleAttackLayerCls().drawn_flights(view).is_empty(), "no line is drawn for the player's own send")
 	await frames(3)
-	check(sc.panes[target - 1].incoming == Vector2i(1, 0) and auth_counts(target) == Vector2i(1, 0), "the pane shows one queued enemy, as the session has it")
-	check(sc.panes[target - 1].incoming == view.counts(target), "(the pane's marker is the presentation's count)")
-	var others_clear := true
-	for i in sc.panes.size():
-		if i + 1 != target and sc.panes[i].incoming != Vector2i.ZERO:
-			others_clear = false
-	check(others_clear, "no other pane shows anything")
-	await frames(70) # past the line's travel and linger
-	check(view.flights.is_empty() and view.marked_ids().is_empty(), "the line is brief: it is gone within a second")
-	check(view.records[a.seq].state == ATTACK.State.QUEUED or view.records[a.seq].state == ATTACK.State.ACTIVE, "(the attack itself goes on: it is not tied to the line)")
+	check(sc.panes[target - 1].incoming == Vector2i(1, 0) and auth_counts(target) == Vector2i(1, 0), "the pane counts one queued enemy, as the session has it")
+	check(sc.panes[target - 1].incoming == view.counts(target), "(the pane's count is the presentation's count)")
+	var landed_ids: Array = []
+	for i in 60:
+		await process_frame
+		if not ret.landed.is_empty():
+			landed_ids = ret.landed.duplicate()
+			break
+	check(landed_ids == [target] and ret.pulses.has(target) and ret.flying.is_empty(), "it lands on the recipient's pane, which punches (%s)" % [landed_ids])
+	await frames(30)
+	check(view.flights.is_empty() and ret.flying.is_empty(), "the flight is brief: it is over within half a second")
+	check(ret.persistent_visible() and ret.target == target and ret.visible, "it has settled as the persistent bracket on the recipient")
+	check(view.records[a.seq].state == ATTACK.State.QUEUED or view.records[a.seq].state == ATTACK.State.ACTIVE, "(the attack itself goes on: it is not tied to the flight)")
+
+func BattleAttackLayerCls():
+	return load("res://Scripts/Classes/Battle/BattleAttackLayer.gd")
 
 # ---- a bot's send ----------------------------------------------------------------------------------------------
 
 func test_bot_send() -> void:
-	print("-- a bot sends to a bot")
+	print("-- a bot sends to a bot: nothing is drawn")
 	var sc = screen()
 	var s = session()
 	var sender := alive_bot(1)
@@ -325,27 +334,19 @@ func test_bot_send() -> void:
 	fixed_target(target)
 	var a = s.report_enemy_defeat(sender, TYPES.Kind.KOOPA)
 	await process_frame
-	var f = sc.attack_view.flight_of(a.seq)
-	check(f != null and f.sender == sender and f.target == target and f.kind == TYPES.Kind.KOOPA, "a bot-to-bot send is a flight from #%d to #%d" % [sender, target])
-	var geo = load("res://Scripts/Classes/Battle/BattleAttackGeometry.gd")
-	check((sc.layout.slots[sender - 1] as Rect2).has_point(geo.launch_point(sc.layout, f.sender, f.target)) and (sc.layout.slots[target - 1] as Rect2).has_point(geo.landing_point(sc.layout, f.sender, f.target)),
-		"it runs from the sender's pane to the target's")
+	check(a != null and sc.attack_view.flight_of(a.seq) == null and sc.attack_view.flights.is_empty(), "a bot-to-bot send makes no flight")
+	check(sc.attack_view.records[a.seq].sender == sender and sc.attack_view.records[a.seq].target == target, "(it is recorded: the previews and the counts still follow it)")
+	check(sc.panes[target - 1].incoming == sc.attack_view.counts(target) and auth_counts(target).x >= 1, "...and the target's count is the session's")
 	# three bots send at the same moment to three different bots
 	var picks := [alive_bot(12), alive_bot(15), alive_bot(18)]
-	var shots := []
 	for i in 3:
 		fixed_target(picks[i])
-		shots.append(s.report_enemy_defeat(alive_bot(20 + i), TYPES.Kind.GOOMBA if i != 1 else TYPES.Kind.KOOPA))
+		s.report_enemy_defeat(alive_bot(20 + i), TYPES.Kind.GOOMBA if i != 1 else TYPES.Kind.KOOPA)
 	await process_frame
-	var distinct := {}
-	var exact := true
-	for i in 3:
-		var g = sc.attack_view.flight_of(shots[i].seq)
-		if g == null or g.target != picks[i] or g.kind != shots[i].kind:
-			exact = false
-		distinct[shots[i].seq] = true
-	check(exact and distinct.size() == 3 and sc.attack_view.flights.size() >= 3, "three simultaneous sends are three separate flights, each with its own target and enemy")
-	await frames(80)
+	check(sc.attack_view.flights.is_empty() and BattleAttackLayerCls().drawn_flights(sc.attack_view).is_empty() and sc.target_reticle.flying.is_empty(), "three simultaneous bot sends draw nothing at all and send no reticle anywhere")
+	check(not sc.panes[target - 1].draws_pips() and not sc.panes[picks[0] - 1].draws_pips(), "no pane shows a queued / active marker (SMB35 has none; only the debug labels mode does)")
+	check(not sc.attack_layer.has_method("_draw_target") and not sc.attack_layer.has_method("_draw_flight"), "the layer no longer has the old target tint, the frame flash or the gold line")
+	await frames(30)
 
 # ---- panes and previews ------------------------------------------------------------------------------------------
 
@@ -421,7 +422,13 @@ func test_player_incoming_ui() -> void:
 		if strip.rows[i].seq != made[i].seq or strip.rows[i].kind != made[i].kind:
 			kinds_ok = false
 	check(kinds_ok, "each icon carries the attack's sequence id and enemy type, in send order")
-	check(sc.attack_view.marked_ids().has(0) and sc.attack_view.flights.size() >= 4, "and the attacks are lines that land on the game window")
+	var lines: Array = BattleAttackLayerCls().drawn_flights(sc.attack_view)
+	var geo2 = load("res://Scripts/Classes/Battle/BattleAttackGeometry.gd")
+	var line_ok := lines.size() >= 4
+	for f in lines:
+		if not (sc.layout.slots[f.sender - 1] as Rect2).has_point(geo2.launch_point(sc.layout, f.sender, 0)) or not (sc.layout.strip_a as Rect2).has_point(geo2.landing_point(sc.layout, f.sender, 0)):
+			line_ok = false
+	check(line_ok, "and the attacks are thin red lines from each sender's own pane into the incoming bar (%d lines)" % lines.size())
 	var saw_flash := false
 	var strip_matches := true
 	var active_seen := false
@@ -486,11 +493,11 @@ func test_ui_fidelity() -> void:
 	sc.select_target_mode(Mode.LOWEST_TIME)
 	await frames(2)
 	var age0: float = sel.age
-	var punch0: float = sc.target_reticle.pulse_age
+	var punch0: float = float(sc.target_reticle.pulses.get(sc.target_reticle.target, -1.0))
 	G.game_paused = true
 	paused = true
 	await frames(30)
-	check(is_equal_approx(sel.age, age0) and is_equal_approx(sc.target_reticle.pulse_age, punch0), "a pause freezes the selector's fade and the reticle's punch (age %.2f, %.2f)" % [sel.age, sc.target_reticle.pulse_age])
+	check(is_equal_approx(sel.age, age0) and is_equal_approx(float(sc.target_reticle.pulses.get(sc.target_reticle.target, -1.0)), punch0), "a pause freezes the selector's fade and the reticle's punch (age %.2f)" % sel.age)
 	check(not sc.select_target_mode(Mode.RANDOM) and s.player_target_mode == Mode.LOWEST_TIME and sel.mode == Mode.LOWEST_TIME, "...and no mode can be chosen meanwhile")
 	paused = false
 	G.game_paused = false
@@ -539,6 +546,93 @@ func test_ui_fidelity() -> void:
 	check(bar.power == 2, "the bar's player icon follows the power state")
 	bar.set_power(int(G.player_power_states[0]))
 
+## The reticle's flight on the real screen: recipient and endpoint, no redirect when the mode changes, rapid sends, a KO in flight,
+## the pause, bot-to-player lines.
+func test_send_flight_rules() -> void:
+	print("-- the reticle flight: recipient, retargeting, rapid sends, a KO in flight, pause")
+	var sc = screen()
+	var s = session()
+	var ret = sc.target_reticle
+	var Mode = BattleTargeting_Mode()
+	var geo = load("res://Scripts/Classes/Battle/BattleAttackGeometry.gd")
+	s.attacks.targeting = load("res://Scripts/Classes/Battle/BattleTargetingModes.gd").new()
+	s.set_player_target_mode(Mode.RANDOM)
+	await frames(60)
+	# the start and the end are the authoritative send's: the window's middle, and the recipient's own pane
+	var a = s.report_enemy_defeat(0, TYPES.Kind.GOOMBA)
+	await frames(1)
+	var f = sc.attack_view.flight_of(a.seq)
+	check(f != null and f.sender == 0 and f.target == a.target and a.target >= 1, "the flight is the authoritative send's: from the player to #%d" % a.target)
+	check(ret.flying.size() == 1 and ret.flying[0].target == a.target, "the reticle flies to that pane")
+	check(geo.send_rect(sc.layout, a.target, 0.0).get_center() == sc.layout.game.get_center() and geo.send_rect(sc.layout, a.target, 1.0) == sc.layout.slots[a.target - 1], "it starts at the window's middle and ends on that pane")
+	# a mode change in flight moves the persistent bracket, never the flight
+	var other := alive_bot(0)
+	if other == a.target:
+		other = alive_bot(1)
+	var saved_time: int = s.contestants[other].time_left
+	s.contestants[other].time_left = 1
+	check(sc.select_target_mode(Mode.LOWEST_TIME) and s.target_of(0) == other, "(Lowest Time is chosen mid-flight: the session's target is #%d now)" % other)
+	var seen_targets := {}
+	var landed_all: Array = []
+	for i in 40:
+		await process_frame
+		for fl in ret.flying:
+			seen_targets[int(fl.target)] = true
+		landed_all.append_array(ret.landed)
+	check(seen_targets.keys() == [a.target] and landed_all == [a.target], "the flight still flew to #%d and landed there: nobody redirected it (it was seen going to %s, landed on %s)" % [a.target, seen_targets.keys(), landed_all])
+	check(ret.persistent_visible() and ret.target == other, "afterwards the persistent bracket is on the session's own target (#%d)" % other)
+	s.contestants[other].time_left = saved_time
+	sc.select_target_mode(Mode.RANDOM)
+	await frames(30)
+	# two sends in the same moment: two brackets, each to its own recipient, in send order
+	var a1 = s.report_enemy_defeat(0, TYPES.Kind.GOOMBA)
+	var a2 = s.report_enemy_defeat(0, TYPES.Kind.KOOPA)
+	await frames(2)
+	check(ret.flying.size() == 2 and ret.flying[0].seq == a1.seq and ret.flying[1].seq == a2.seq and ret.flying[0].target == a1.target and ret.flying[1].target == a2.target and not ret.persistent_visible(), "rapid sends: two brackets in the air, in send order, each to its own recipient")
+	landed_all = []
+	for i in 40:
+		await process_frame
+		landed_all.append_array(ret.landed)
+	check(landed_all.size() == 2 and landed_all.has(a1.target) and landed_all.has(a2.target) and ret.flying.is_empty(), "both land, and none is left in the air")
+	check(ret.persistent_visible() and ret.target == s.target_of(0) and s.target_of(0) == a2.target, "one bracket is left: on the last recipient")
+	# the recipient is eliminated in flight
+	var a3 = s.report_enemy_defeat(0, TYPES.Kind.GOOMBA)
+	await frames(2)
+	var victim: int = a3.target
+	s.report_ko(victim, SESSION.KoCause.HAZARD)
+	landed_all = []
+	var cut_seen := false
+	for i in 40:
+		await process_frame
+		landed_all.append_array(ret.landed)
+		for fl in ret.flying:
+			if bool(fl.cut):
+				cut_seen = true
+	check(not landed_all.has(victim) and ret.flying.is_empty() and ret.target != victim and sc.panes[victim - 1].ko, "a recipient eliminated in flight: the bracket is cut, never lands on the KO'd pane, and the reticle goes on to the new target (#%d)" % ret.target)
+	check(cut_seen or landed_all.is_empty(), "(the cut was presented)")
+	# the pause holds a flight
+	var a4 = s.report_enemy_defeat(0, TYPES.Kind.GOOMBA)
+	await frames(3)
+	var progress0: float = float(ret.flying[0].progress) if not ret.flying.is_empty() else -1.0
+	G.game_paused = true
+	paused = true
+	await frames(30)
+	check(not ret.flying.is_empty() and is_equal_approx(float(ret.flying[0].progress), progress0), "a pause freezes the flight where it was (progress %.2f)" % progress0)
+	paused = false
+	G.game_paused = false
+	await frames(40)
+	check(ret.flying.is_empty() and ret.persistent_visible(), "...and it lands after the pause")
+	# bot -> player: the line starts in the sender's own pane
+	fixed_target(0)
+	var sender := alive_bot(6)
+	var b = s.report_enemy_defeat(sender, TYPES.Kind.GOOMBA)
+	await frames(3)
+	var drawn: Array = BattleAttackLayerCls().drawn_flights(sc.attack_view)
+	check(drawn.size() >= 1 and drawn.any(func(fl): return fl.seq == b.seq and fl.sender == sender), "a bot's send at the player is a line, from that bot")
+	check((sc.layout.slots[sender - 1] as Rect2).has_point(geo.launch_point(sc.layout, sender, 0)) and sc.status_strip.watch_out, "which starts in the sender's own pane, and WATCH OUT! shows")
+	s.attacks.targeting = load("res://Scripts/Classes/Battle/BattleTargetingModes.gd").new()
+	await frames(60)
+
 func BattleAttackPresentationPhase():
 	return load("res://Scripts/Classes/Battle/BattleAttackPresentation.gd").Phase
 
@@ -559,12 +653,13 @@ func test_round_restart() -> void:
 	player().die()
 	await wait_until(func(): return rnd().state == ROUND.State.RESULTS, 1500)
 	check(sc.incoming_strip.rows.is_empty() and sc.incoming_strip.counts == Vector2i.ZERO, "when the player is out nothing is left aimed at them: the strip is empty")
+	check(sc.field_frozen and sc.target_reticle.flying.is_empty() and not sc.target_reticle.visible and old_view.flights.is_empty() and BattleAttackLayerCls().drawn_flights(old_view).is_empty(), "no reticle flight, bracket or line is left hanging over the results")
 	rnd().time_in_state = ROUND.RESULTS_MAX_SECONDS
 	await wait_until(func(): return level_running() and rnd().state == ROUND.State.PLAYING and session() != old_session, 1800)
 	await frames(5)
 	var fresh = sc.attack_view
 	check(fresh != null and fresh != old_view and fresh.session == session() and fresh.session != old_session, "the new round has a new presentation, on the new session")
-	check(fresh.flights.is_empty() and fresh.records.is_empty() and fresh.marked_ids().is_empty() and fresh.signature() == "0:0", "with no lines, records, marks or history")
+	check(fresh.flights.is_empty() and fresh.records.is_empty() and fresh.player_flights().is_empty() and fresh.signature() == "0:0", "with no lines, flights, records or history")
 	check(sc.attack_layer.view == fresh and sc.incoming_strip.view == fresh and sc.incoming_strip.rows.is_empty() and sc.incoming_strip.counts == Vector2i.ZERO,
 		"the layer and the strip follow it and show nothing")
 	var clean := true
