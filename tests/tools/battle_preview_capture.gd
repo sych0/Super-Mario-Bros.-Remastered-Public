@@ -48,6 +48,7 @@ func _run() -> void:
 		packs.insert(0, added_pack) # in memory only; removed again before quitting
 	var Session = load("res://Scripts/Classes/Battle/BattleSession.gd")
 	var Handler = load("res://Scripts/Classes/Battle/BattleHandler.gd")
+	load("res://Scripts/Classes/Battle/BattleRound.gd").pre_round_override = 0.0 # the capture drives the clock itself
 	if args.has("window"):
 		var wh: PackedStringArray = String(args.window).split("x")
 		DisplayServer.window_set_position(Vector2i.ZERO)

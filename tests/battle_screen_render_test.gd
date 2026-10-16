@@ -103,6 +103,7 @@ func _run() -> void:
 	S = root.get_node("Settings")
 	BS = load("res://Scripts/Classes/Battle/BattleScreen.gd")
 	HANDLER = load("res://Scripts/Classes/Battle/BattleHandler.gd")
+	load("res://Scripts/Classes/Battle/BattleRound.gd").pre_round_override = 0.0 # the checks move Mario at once
 	SESSION = load("res://Scripts/Classes/Battle/BattleSession.gd")
 	out = args.get("out", out)
 	var packs: Array = S.file.visuals.resource_packs
@@ -237,12 +238,25 @@ func _run() -> void:
 	var after: Image = await grab("battle_m1_after_fade")
 	check(near(px(after, 1, 135), BS.WALLPAPER), "wallpaper still intact after the fade")
 
+	# -- a round ends: the real player dies, the result card dims the window only, the next round starts ----------------
+	var round_before: int = scr.battle_round.round_number
+	var back_in_level: bool = await wait_until(func(): return level_running(), 1800) # the fade test above went through LevelTransition
+	check(back_in_level, "1-1 is running again after the fade test's transition")
+	await frames(30)
+	player().die()
+	var shown: bool = await wait_until(func(): return scr.showing_result, 1200)
+	check(shown, "the real player's death ends the round with the result card")
+	await frames(3)
+	var result: Image = await grab("battle_m3_round_result")
+	check(px(result, 240, 100).get_luminance() < 0.2 and near(px(result, 1, 135), BS.WALLPAPER), "the result card dims the game window only")
+	scr.battle_round.time_in_state = scr.battle_round.RESULTS_MAX_SECONDS
+	var again: bool = await wait_until(func(): return level_running() and scr.battle_round.round_number == round_before + 1, 1500)
+	check(again and current_scene == scr, "the next round runs in the same Battle screen (never the title)")
+	await frames(90)
+	await grab("battle_m3_next_round_pre_round")
+
 	# -- leave Battle ----------------------------------------------------------------------------------------------
 	HANDLER.quit_battle()
-	await wait_until(func(): return scr.showing_result, 60)
-	var result: Image = await grab("battle_m1_quit_result")
-	check(px(result, 240, 100).get_luminance() < 0.2 and near(px(result, 1, 135), BS.WALLPAPER), "the quit result dims the game window only")
-	scr.result_age = HANDLER.RESULT_MAX_SECONDS
 	var left: bool = await wait_until(func(): return current_scene != null and current_scene.scene_file_path.ends_with("TitleScreen.tscn") and not G.transitioning_scene, 1500)
 	await frames(20)
 	check(left and root.content_scale_size == before_scale, "back on the title with the user's own resolution (%s)" % root.content_scale_size)

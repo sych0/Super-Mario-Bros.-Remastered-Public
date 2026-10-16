@@ -74,20 +74,27 @@ func _run() -> void:
 	check(s.get_provisional_rank() == 1 or s.get_provisional_rank() < 35, "player progress feeds rank")
 	check(screen.driver == null or screen.driver.tracks.size() >= 1, "the live preview driver (all 34 opponents) is optional, never required")
 
-	# The result overlay (interim, until the round lifecycle exists) is a view of the finished session.
-	var others: int = s.alive_count
+	# The result card is a view of the finished session, shown by the round lifecycle (BattleRound).
+	var RoundCls = load("res://Scripts/Classes/Battle/BattleRound.gd")
+	RoundCls.pre_round_override = 0.0
+	screen.set_process(false) # drive the lifecycle by hand
+	screen.battle_round.begin_round()
+	screen.battle_round.level_ready()
+	var others: int = s.alive_count - 1
 	s.report_ko(0, s.KoCause.HAZARD)
-	s.resolve_to_end()
-	screen.show_result(s, others)
+	screen.round_over(RoundCls.End.DEATH)
+	screen.death_finished()
 	await frames(2)
 	check(screen.showing_result and screen._overlay.visible, "result overlay is shown when the player is KO'd")
 	check(screen._overlay.get_rect() == screen.layout.game, "the result covers the game window only")
-	check(screen._overlay_label.text.contains("PLACE") or screen._overlay_label.text.contains("WON"), "result shows placement")
+	check(screen._overlay_label.text.contains("PLACED") or screen._overlay_label.text.contains("WON"), "result shows placement")
 	check(screen._overlay_label.text.contains("WINNER"), "result shows the winner")
-	check(screen._overlay_label.text.contains("LEFT"), "result shows opponents remaining at KO")
-	check(not screen.result_dismissed(), "result stays up until dismissed")
-	screen.result_age = HANDLER.RESULT_MAX_SECONDS
-	check(screen.result_dismissed(), "result auto-continues after its timer")
+	check(screen._overlay_label.text.contains("LEFT"), "result shows opponents remaining")
+	check(screen._overlay_label.text.contains("NEXT ROUND"), "result says the next round follows (not the title)")
+	check(not screen.battle_round.results_dismissed(true), "result cannot be skipped during its lockout")
+	screen.battle_round.time_in_state = RoundCls.RESULTS_MAX_SECONDS
+	check(screen.battle_round.results_dismissed(false), "result auto-continues after its timer")
+	RoundCls.pre_round_override = -1.0
 
 	# A session going away (end of match) does not take the screen with it: leaving is a scene change.
 	SESSION.clear()

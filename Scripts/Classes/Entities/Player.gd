@@ -1282,6 +1282,8 @@ func die(pit: bool = false, type: String = "") -> void:
 		return
 	if type != "": last_damage_source = type if type in valid_death_types else ""
 	is_dead = true
+	if Global.current_game_mode == Global.GameMode.BATTLE:
+		BattleHandler.on_player_died() # the KO counts now, not when the death music ends
 	visible = not pit
 	dead.emit()
 	AudioManager.play_sfx("die_sting", global_position)
@@ -1345,7 +1347,7 @@ func death_load() -> void:
 			Global.current_level.reload_level(),
 
 		Global.GameMode.BATTLE: func():
-			BattleHandler.end_match(),
+			BattleHandler.on_death_finished(),
 
 		"time_up": func():
 			Global.transition_to_scene("res://Scenes/Levels/TimeUp.tscn"),

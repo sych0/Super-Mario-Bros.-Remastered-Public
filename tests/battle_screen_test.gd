@@ -78,6 +78,7 @@ func _run() -> void:
 	HANDLER = load("res://Scripts/Classes/Battle/BattleHandler.gd")
 	SESSION = load("res://Scripts/Classes/Battle/BattleSession.gd")
 	LAYOUT = load("res://Scripts/Classes/Battle/BattleHudLayout.gd")
+	load("res://Scripts/Classes/Battle/BattleRound.gd").pre_round_override = 0.0 # these tests move Mario at once; the pre-round has its own test
 	scene_changed.connect(func(): scene_changes += 1)
 	# The game saves its settings file whenever the window changes (Battle changes the canvas), so the test
 	# puts the file back byte for byte when it is done.
@@ -106,6 +107,7 @@ func _run() -> void:
 
 	for key in saved_video:
 		S.file.video[key] = saved_video[key]
+	load("res://Scripts/Classes/Battle/BattleRound.gd").pre_round_override = -1.0
 	var settings_out := FileAccess.open(S.SETTINGS_DIR, FileAccess.WRITE)
 	settings_out.store_string(saved_settings_file)
 	settings_out.close()
@@ -244,7 +246,6 @@ func test_global_ui_and_pause() -> void:
 	var alpha_before: float = HANDLER.presentation_alpha
 	paused = true
 	Input.action_press("move_right_0")
-	var result_age_before: float = scr.result_age
 	await frames(60)
 	Input.action_release("move_right_0")
 	check(not scr.game_viewport.can_process() and scr.can_process(), "paused: the game window stops, the Battle screen does not")
@@ -369,10 +370,7 @@ func test_window_ownership_and_quit(before: Dictionary) -> void:
 	await frames(2)
 	HANDLER.quit_battle()
 	paused = true # the pause menu pauses while it waits for the level to go
-	var overlay: bool = await wait_until(func(): return scr.showing_result, 60)
-	check(overlay, "Quit shows the match result over the window")
-	check(scr._overlay.get_parent().layer == BS.OVERLAY_LAYER and scr._overlay.get_rect() == scr.layout.game, "the result covers the game window on the overlay layer")
-	scr.result_age = HANDLER.RESULT_MAX_SECONDS
+	check(SESSION.current == null and G.current_game_mode == G.GameMode.NONE, "Quit clears the session and leaves Battle mode at once")
 	var left: bool = await wait_until(func(): return current_scene != null and current_scene.scene_file_path == TITLE and not G.transitioning_scene, 1500)
 	check(left, "Quit leaves Battle for the title")
 	await frames(10)
@@ -394,8 +392,6 @@ func test_setting_changed_during_battle() -> void:
 	await frames(3)
 	check(root.content_scale_size == Vector2i(480, 270) and root.content_scale_stretch == Window.CONTENT_SCALE_STRETCH_INTEGER, "the canvas stays 480x270 while a new size is chosen")
 	HANDLER.quit_battle()
-	await wait_until(func(): return screen().showing_result, 60)
-	screen().result_age = HANDLER.RESULT_MAX_SECONDS
 	var left: bool = await wait_until(func(): return current_scene != null and current_scene.scene_file_path == TITLE and not G.transitioning_scene, 1500)
 	await frames(10)
 	check(left and root.content_scale_size == Vector2i(426, 240) and root.content_scale_mode == Window.CONTENT_SCALE_MODE_VIEWPORT and root.content_scale_stretch == Window.CONTENT_SCALE_STRETCH_INTEGER, "after Battle the new setting applies (%s)" % root.content_scale_size)

@@ -5,13 +5,14 @@ extends Control
 ## badges, plus the real player's classic game running unchanged inside a 256x240 SubViewport
 ## (`GameViewport`) shown as the centre window. Classic code therefore sees a 256x240 viewport
 ## (camera walls, enemy activation, drop shadows...) exactly as in Classic modes; the Battle
-## canvas only surrounds it. A pure view of the current BattleSession plus the host of the
-## game scene.
+## canvas only surrounds it. A view of the current BattleSession plus the host of the game
+## scene and of the round lifecycle (BattleRound): READY, play, results, next round.
 ##
 ## Game scenes never go through change_scene_to_file while Battle runs: Global.transition_to_scene
 ## hands them to `load_game_scene`, which swaps the scene inside GameViewport and keeps this
-## screen alive. Leaving Battle is an ordinary transition to the title, which frees this screen
-## and, with it, the game scene.
+## screen alive. A round ending (death, time out, a win) never leaves this screen: the next
+## round reloads World 1-1 into the same GameViewport. Only Quit leaves Battle, as an ordinary
+## transition to the title, which frees this screen and, with it, the game scene.
 
 const TITLE_SCENE := "res://Scenes/Levels/TitleScreen.tscn"
 const FONT_PATH := "res://Resources/ThemedResources/FontMain.tres"
@@ -24,6 +25,7 @@ const BADGE_FILL := Color(0.99, 0.97, 0.9, 1)
 const BADGE_EDGE := Color(0.4, 0.22, 0.1, 1)
 const BADGE_TEXT := Color(0.25, 0.14, 0.06, 1)
 const OVERLAY_LAYER := 90
+const FREEZE_DELAY_FRAMES := 3 ## frames a fresh level runs before the pre-round freezes it (camera and Mario settle)
 
 ## Emitted once a game scene (LevelTransition, a level, ...) has been added to GameViewport.
 signal game_scene_changed(scene: Node)
@@ -31,6 +33,8 @@ signal game_scene_changed(scene: Node)
 static var instance: BattleScreen = null
 ## Dev/test switch: false keeps every window on the placeholder (previews off).
 static var live_previews := true
+## Where "the player confirmed" comes from. Empty = the real input (jump or accept); tests replace it.
+static var confirm_source := Callable()
 
 var session: BattleSession = null # the session being displayed (kept alive for the result)
 var layout := {}
@@ -43,9 +47,10 @@ var panes: Array[BattleOpponentPane] = [] ## 32x41 windows on the canvas, each s
 var driver: BattlePreviewDriver = null ## drives the live previews (all 34 on World 1-1)
 var debug_view: TextureRect = null ## dev only: opponent #1's atlas cell at native size over the window
 var audio_listener: AudioListener2D = null
-var showing_result := false
+var battle_round := BattleRound.new() ## the round lifecycle; the same object for every round of this Battle
+var game_frozen := false ## the game window is frozen for the pre-round (or a win)
 var result_text := ""
-var result_age := 0.0
+var round_others_alive := 0 ## opponents still in when the round ended
 var _font: Font = null
 var _time_label := Label.new()
 var _rank_label := Label.new()
@@ -55,6 +60,7 @@ var _total_label := Label.new()
 var _overlay_layer := CanvasLayer.new()
 var _overlay := ColorRect.new()
 var _overlay_label := Label.new()
+var _banner := Label.new() ## "READY" / "GO!" over the window
 var _saved_window := {}
 var _window_owned := false
 var _applied_visuals := -1
@@ -103,12 +109,18 @@ static func release_transition() -> void:
 
 # ---- lifecycle ---------------------------------------------------------------------------------
 
+## True while the result card is up.
+var showing_result: bool:
+	get: return battle_round.state == BattleRound.State.RESULTS
+
 func _init() -> void:
 	name = "BattleScreen"
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	position = Vector2.ZERO
 	size = BattleHudLayout.CANVAS
+	battle_round.state_changed.connect(_on_round_state_changed)
+	battle_round.begin_round() # round 1: LOADING until the first level is in the window
 
 func _enter_tree() -> void:
 	instance = self
@@ -126,6 +138,8 @@ func _ready() -> void:
 func _exit_tree() -> void:
 	if instance == self:
 		instance = null
+	if game_frozen:
+		Global.can_time_tick = true # never leave the Battle clock stopped behind us
 	_release_global_ui()
 	_restore_window()
 	_window_owned = false
@@ -239,6 +253,16 @@ func replace_game_scene(scene_path: String) -> void:
 	game_scene = packed.instantiate()
 	game_viewport.add_child(game_scene)
 	game_scene_changed.emit(game_scene)
+	if battle_round.state == BattleRound.State.LOADING and game_scene is Level:
+		_arm_pre_round(game_scene) # a round's first level (not LevelTransition, not 1-1 -> 1-2)
+
+## The pre-round starts a few frames after World 1-1 is in the window, so its camera and Mario have
+## settled on the level's start instead of the first frame's defaults.
+func _arm_pre_round(scene: Node) -> void:
+	for i in FREEZE_DELAY_FRAMES:
+		await get_tree().process_frame
+	if is_instance_valid(scene) and scene == game_scene and battle_round.state == BattleRound.State.LOADING:
+		battle_round.level_ready()
 
 # ---- building ----------------------------------------------------------------------------------
 
@@ -286,6 +310,19 @@ func _build(l: Dictionary) -> void:
 	_overlay_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_style(_overlay_label)
 	_overlay.add_child(_overlay_label)
+	# READY / GO! sits in the middle of the game window.
+	_banner.name = "Banner"
+	_banner.position = game.position + Vector2(0, game.size.y / 2.0 - 16.0)
+	_banner.size = Vector2(game.size.x / 2.0, 16.0)
+	_banner.scale = Vector2(2, 2)
+	_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_banner.visible = false
+	_style(_banner)
+	_banner.add_theme_color_override("font_color", Color.WHITE)
+	_banner.add_theme_color_override("font_shadow_color", Color.BLACK)
+	_banner.add_theme_constant_override("shadow_offset_x", 1)
+	_banner.add_theme_constant_override("shadow_offset_y", 1)
+	_overlay_layer.add_child(_banner)
 
 ## The classic game: a 256x240 SubViewport shown 1:1 (logical) with nearest filtering. Nothing
 ## in here ever sees the canvas size, so classic camera / physics / enemy code is unchanged.
@@ -365,18 +402,25 @@ func _process(delta: float) -> void:
 	if OS.is_debug_build() and not _warned_root_camera and get_viewport().get_camera_2d() != null:
 		_warned_root_camera = true
 		push_warning("BattleScreen: a Camera2D became current in the root viewport; the game camera belongs in GameViewport")
-	if showing_result:
-		result_age += delta
-		return
-	# Between the end of a match and the scene change to the title there is no session.
+	battle_round.update(delta, _confirm_pressed() if battle_round.state == BattleRound.State.RESULTS else false)
+	_banner.text = battle_round.banner_text()
+	_banner.visible = _banner.text != ""
 	if BattleSession.current == null:
-		return
+		return # between Quit and the scene change to the title
 	session = BattleSession.current
+	# Last one standing: the Battle clock only runs inside a level, but the win is seen from here.
+	if battle_round.state == BattleRound.State.PLAYING and session.finished and session.get_player().alive:
+		round_over(BattleRound.End.WIN)
 	_ensure_driver()
 	refresh()
 	if driver != null:
 		for id in driver.update(BattleHandler.presentation_alpha):
 			cells[id - 1].queue_redraw()
+
+func _confirm_pressed() -> bool:
+	if confirm_source.is_valid():
+		return confirm_source.call()
+	return Global.multibind_action_just_pressed("ui_accept") or Global.player_action_just_pressed("jump", 0)
 
 func _follow_game_camera() -> void:
 	var camera := game_viewport.get_camera_2d()
@@ -391,6 +435,8 @@ func _ensure_driver() -> void:
 	if session == null or not live_previews or (driver != null and driver.session == session):
 		return
 	driver = null
+	for cell in cells:
+		cell.set_live(null, null) # nothing of a previous session's pictures may linger
 	var ids: Array = range(1, BattleHudLayout.OPPONENTS + 1)
 	driver = BattlePreviewDriver.create(session, ids, float(BattlePreviewAtlas.CELL_PX.x))
 	if driver == null:
@@ -427,36 +473,98 @@ func refresh() -> void:
 	_alive_label.text = "%d" % session.alive_count
 	_course_label.text = "%d-%d" % [session.world, session.level]
 
-# ---- match result (interim: the round lifecycle comes in a later milestone) ----------------------
+# ---- round lifecycle (doc 38, section 7) -----------------------------------------------------------
 
-## Shows the end-of-match overlay for `final_session`. `others_alive` is how many opponents
-## were still in when the player went out.
+## The round has ended (called by BattleHandler.on_player_died for a death or a time out, and by
+## _process for a win). Ignored unless the round is being played, so it can only happen once.
+func round_over(cause: int) -> void:
+	battle_round.end_round(cause)
+
+## The player's death animation and music are over: the results may come up.
+func death_finished() -> void:
+	battle_round.death_finished()
+
+## Everything that follows from a round state change: freezing and releasing the game window, the
+## results card, the next round. All of it is presentation or a call into the one shared start path.
+func _on_round_state_changed(from: int, to: int) -> void:
+	match to:
+		BattleRound.State.PRE_ROUND:
+			_set_game_frozen(true)
+		BattleRound.State.PLAYING:
+			_set_game_frozen(false)
+		BattleRound.State.ROUND_OVER:
+			_begin_round_over()
+		BattleRound.State.RESULTS:
+			_show_results()
+		BattleRound.State.LOADING:
+			if from == BattleRound.State.RESULTS:
+				_start_next_round()
+
+## Freezes (or releases) the game window: gameplay stops, and so does the Battle clock, which is
+## driven by BattleHandler inside the level. The real game's HUD timer stops with it.
+func _set_game_frozen(frozen: bool) -> void:
+	game_frozen = frozen
+	game_viewport.process_mode = Node.PROCESS_MODE_DISABLED if frozen else Node.PROCESS_MODE_PAUSABLE
+	Global.can_time_tick = not frozen
+
+func _begin_round_over() -> void:
+	var s := BattleSession.current
+	if s != null:
+		round_others_alive = s.alive_count - (1 if s.get_player().alive else 0)
+	if battle_round.end_cause == BattleRound.End.WIN:
+		_set_game_frozen(true) # nothing plays out after a win: hold the picture
+
+## Finishes the match behind the results: the rest of the placements are decided now (the bots play
+## it out), so the results show a complete ranking. The player's own placement was fixed at their KO.
+func _show_results() -> void:
+	var s := BattleSession.current
+	if s == null:
+		return
+	s.resolve_to_end()
+	print(s.describe_result())
+	AudioManager.stop_all_music()
+	Global.death_load = false
+	show_result(s, round_others_alive)
+
+## The results were dismissed: a fresh round through the shared start path (a new session and seed,
+## World 1-1 loaded into this same game window). The title is never involved.
+func _start_next_round() -> void:
+	_hide_result()
+	var hud := Global.get_node_or_null("GameHUD")
+	var pause_menu := hud.get_node_or_null("BattlePause") if hud != null else null
+	if pause_menu != null and pause_menu.visible:
+		pause_menu.close() # a pause menu left open over the results must not sit on top of the next round
+	_set_game_frozen(false)
+	for cell in cells:
+		cell.set_live(null, null) # the new session gets its own tracks
+	driver = null
+	BattleHandler.start_match()
+
+## Builds and shows the result card for `final_session`. `others_alive` is how many opponents
+## were still in when the round ended. A view only: the state machine decides when it shows.
 func show_result(final_session: BattleSession, others_alive: int) -> void:
 	session = final_session
-	showing_result = true
-	result_age = 0.0
 	refresh()
 	var p := final_session.get_player()
-	var lines: Array[String] = ["BATTLE OVER", ""]
+	var lines: Array[String] = ["ROUND %d OVER" % battle_round.round_number, ""]
 	if final_session.winner_id == BattleSession.PLAYER_ID:
 		lines.append("YOU WON!")
 	else:
 		lines.append("YOU PLACED %d / %d" % [p.placement, BattleSession.CONTESTANT_COUNT])
-	lines.append("OUT BY: " + BattleSession.KoCause.keys()[p.ko_cause])
-	lines.append("OPPONENTS LEFT WHEN OUT: %d" % others_alive)
+		lines.append("OUT BY: " + BattleSession.KoCause.keys()[p.ko_cause])
+	lines.append("OPPONENTS LEFT: %d" % others_alive)
 	lines.append("LEVELS CLEARED: %d" % p.levels_cleared)
 	lines.append("")
 	if final_session.winner_id == BattleSession.PLAYER_ID:
 		lines.append("WINNER: YOU")
 	else:
 		lines.append("WINNER: #%02d" % final_session.winner_id)
-	lines.append("MATCH FINISHED")
 	lines.append("")
-	lines.append("PRESS JUMP TO CONTINUE")
+	lines.append("PRESS JUMP FOR NEXT ROUND")
 	result_text = "\n".join(lines)
 	_overlay_label.text = result_text
 	_overlay.visible = true
 
-func result_dismissed() -> bool:
-	return showing_result and (result_age >= BattleHandler.RESULT_MAX_SECONDS or (
-		result_age >= BattleHandler.RESULT_MIN_SECONDS and Global.player_action_just_pressed("jump", 0)))
+func _hide_result() -> void:
+	_overlay.visible = false
+	result_text = ""

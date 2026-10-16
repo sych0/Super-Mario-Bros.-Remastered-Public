@@ -2,12 +2,13 @@ class_name BattleHandler
 extends Node
 ## The Battle piece that touches the game's scene tree. Added to each level by Level._enter_tree
 ## while a BattleSession is active (the level runs inside BattleScreen's GameViewport). Drives
-## the session's fixed clock and forwards the real player's events to it.
+## the session's fixed clock and forwards the real player's events to it. Its static functions
+## are Battle's entry points into the rest of the game: starting a round, the player's death,
+## and quitting. The round lifecycle itself lives in BattleRound / BattleScreen.
 
 const TITLE_SCENE := "res://Scenes/Levels/TitleScreen.tscn"
 const STEP_SECONDS := 1.0
-const RESULT_MIN_SECONDS := 1.0
-const RESULT_MAX_SECONDS := 10.0
+const TIME_UP_RETRY_SECONDS := 1.0 ## the real game ignores a death while Mario is in a pipe / exiting: ask again
 const SPEED_ARG := "--battle-sim-speed="
 const SPEED_ENV := "SMB1R_BATTLE_SIM_SPEED"
 
@@ -16,7 +17,8 @@ static var _sim_speed := -1
 ## previews use it to animate smoothly between session ticks; the session never reads it.
 ## It freezes with the handler, so previews stop while the game is paused.
 static var presentation_alpha := 0.0
-static var ending_session: BattleSession = null
+## Where a new round's seed comes from. Tests replace it with a scripted sequence.
+static var seed_source := Callable()
 
 ## DEVELOPMENT ONLY: multiplies how fast the Battle clock/bots run so a short test shows a
 ## whole match. Needs a debug build plus `--battle-sim-speed=N` (after `--`) or the
@@ -37,7 +39,7 @@ static func sim_speed() -> int:
 var fresh_level := false
 var accumulator := 0.0
 var level_completed := false
-var timeout_sent := false
+var time_up_wait := 0.0 ## real seconds until the next "time up" is sent (only once the player is out of time)
 var progress_start_x := 0.0
 var progress_end_x := 0.0
 var progress_ready := false
@@ -81,11 +83,13 @@ func _process(delta: float) -> void:
 	# The session timer is authoritative; the level timer just mirrors it for display.
 	Global.time = maxi(session.get_player().time_left, 0)
 	if not session.get_player().alive:
-		if not timeout_sent:
-			timeout_sent = true
+		# The session KO'd the player (time ran out): have the real player die so the round ends the
+		# normal way. The game ignores a death in some states (pipes, level exit), so keep asking.
+		time_up_wait -= delta
+		if time_up_wait <= 0.0:
+			time_up_wait = TIME_UP_RETRY_SECONDS
 			get_tree().call_group("Players", "time_up")
-	elif session.finished:
-		end_match()
+	# (A win - everyone else out - is noticed by BattleScreen, which also sees it between levels.)
 
 ## Live progress of the real player = how far they are between where they started the level
 ## and its goal object (flagpole / castle bridge). No goal found -> no live progress.
@@ -109,9 +113,22 @@ func _report_progress(session: BattleSession) -> void:
 func owner_level_nodes() -> Array[Node]:
 	return get_parent().find_children("*", "Node2D", true, false)
 
-## Starts a Battle from the title: the same reset a new Classic run does, a fresh session, then a
-## transition into 1-1 that BattleScreen routes into its own GameViewport.
+## A seed for a new round: from `seed_source` if a test set one, else the global RNG, and never
+## the same as the previous round's.
+static func new_seed(previous := -1) -> int:
+	var value := 0
+	for attempt in 8:
+		value = seed_source.call() if seed_source.is_valid() else randi()
+		if value != previous:
+			return value
+	return value + 1
+
+## Starts a Battle round: from the title (the first round) and from the results (every next round).
+## The one shared reset path: the same reset a new Classic run does, a fresh session with a new
+## seed, then a transition into 1-1 that BattleScreen routes into its own GameViewport. It never
+## goes through the title screen.
 static func start_match() -> void:
+	var previous_seed := BattleSession.current.seed_value if BattleSession.current != null else -1
 	Global.current_game_mode = Global.GameMode.BATTLE
 	Global.current_campaign = "SMB1"
 	Global.second_quest = false
@@ -119,33 +136,39 @@ static func start_match() -> void:
 	Global.world_num = 1
 	Global.level_num = 1
 	Global.reset_values()
-	BattleSession.begin(randi())
+	BattleSession.begin(new_seed(previous_seed))
+	presentation_alpha = 0.0
 	PipeCutscene.seen_cutscene = false
+	Level.first_load = true # a win leaves no death to set it: 1-1 must start as a fresh level
+	Global.death_load = false
+	(Engine.get_main_loop() as SceneTree).paused = false
 	LevelTransition.level_to_transition_to = Level.get_scene_string(1, 1)
 	Global.transition_to_scene("res://Scenes/Levels/LevelTransition.tscn")
 
-## Finishes the match from the real player's side, logs the ranking, clears the session and
-## returns to the title screen. Safe to call more than once.
-static func end_match(cause := BattleSession.KoCause.HAZARD) -> void:
+## Called by Player.die() (Battle only), at the moment of death: the player's KO is registered
+## now, so their placement reflects when they actually died. A KO the session already made
+## (time ran out) is not repeated, and a second death report for the round changes nothing.
+static func on_player_died() -> void:
 	var session := BattleSession.current
-	if session == null or ending_session == session:
+	if session == null:
 		return
-	ending_session = session
-	session.report_ko(BattleSession.PLAYER_ID, cause)
-	var others_alive := session.alive_count
-	session.resolve_to_end()
-	print(session.describe_result())
-	AudioManager.stop_all_music()
-	Global.death_load = false
-	var tree := Engine.get_main_loop() as SceneTree
-	var screen := BattleScreen.instance if BattleScreen.is_active() else null
-	if screen != null:
-		screen.show_result(session, others_alive)
-		while is_instance_valid(screen) and screen.is_inside_tree() and not screen.result_dismissed():
-			await tree.process_frame
-	BattleSession.clear()
-	ending_session = null
-	Global.transition_to_scene(TITLE_SCENE)
+	var player := session.get_player()
+	if player.alive:
+		session.report_ko(BattleSession.PLAYER_ID, BattleSession.KoCause.HAZARD)
+	if BattleScreen.is_active():
+		var cause: int = BattleRound.End.TIMEOUT if player.ko_cause == BattleSession.KoCause.TIME else BattleRound.End.DEATH
+		BattleScreen.instance.round_over(cause)
 
+## Called by Player.death_load() (Battle only), once the death animation and music are done.
+static func on_death_finished() -> void:
+	if BattleScreen.is_active():
+		BattleScreen.instance.death_finished()
+
+## Explicit Quit (the Battle pause menu): the only way out of Battle. No results, no next round:
+## the session goes, Battle mode ends, and the title is next (which frees the Battle screen and
+## hands the window back to the user's settings).
 static func quit_battle() -> void:
-	end_match(BattleSession.KoCause.FORFEIT)
+	BattleSession.clear()
+	Global.death_load = false
+	Global.current_game_mode = Global.GameMode.NONE
+	Global.transition_to_scene(TITLE_SCENE)

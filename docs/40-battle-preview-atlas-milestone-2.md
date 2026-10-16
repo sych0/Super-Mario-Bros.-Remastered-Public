@@ -1,7 +1,7 @@
 # 40 — Battle screen, milestone 2 (previews at resolution): what was built and measured
 
-Status: implemented on top of `623f453` (doc 38 section 10, milestone 2). Milestones 3 (round lifecycle) and 4 (strip /
-badge content) are not started. Nothing in the layout, wallpaper, frame, badges, strips, `GameViewport`, `BattleSession`
+Status: implemented on top of `623f453` (doc 38 section 10, milestone 2). Milestone 3 (round lifecycle) followed in doc 41; milestone 4 (strip /
+badge content) is not started. Nothing in the layout, wallpaper, frame, badges, strips, `GameViewport`, `BattleSession`
 or the preview tracks changed.
 
 ## 1. What now exists
