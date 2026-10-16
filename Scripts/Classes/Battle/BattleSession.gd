@@ -12,7 +12,7 @@ enum KoCause {NONE, HAZARD, TIME, FORFEIT}
 ## so recording them cannot change a match. Used by the opponent previews to stage outcomes.
 ## The attack events (ENEMY_DEFEATED onwards) are written by BattleAttackSystem.
 ## (New types are only ever appended, so recorded values never change meaning.)
-enum EventType {HIT, POWER_UP, LEVEL_CLEAR, KO, ENEMY_DEFEATED, SENT, RECEIVED, INCOMING_ACTIVATED, INCOMING_RESOLVED, INCOMING_SPAWNED}
+enum EventType {HIT, POWER_UP, LEVEL_CLEAR, KO, ENEMY_DEFEATED, SENT, RECEIVED, INCOMING_ACTIVATED, INCOMING_RESOLVED, INCOMING_SPAWNED, TARGET_CHANGED}
 
 const CONTESTANT_COUNT := 35
 const PLAYER_ID := 0
@@ -49,9 +49,16 @@ var level := 1
 ##                       (+ source = BattleAttribution.Source when the real game killed its enemy)
 ##   INCOMING_SPAWNED    id = target (the real player), a = seq, b = sender, kind: its one real enemy is in the level
 ##   (ENEMY_DEFEATED also carries `defeat`, the round's defeat number it was sent for.)
+##   TARGET_CHANGED  id = the contestant, a = its new target (-1: none), b = its old target. Logged on a send, a KO
+##                   of the target, a measure-following mode's tick and a mode change; never for the first
+##                   targets, which every contestant holds from the start (`BattleAttackSystem.initial_targets`).
 var events: Array[Dictionary] = []
 ## The enemy send / receive loop of this round (state, queues, targeting, its own random streams).
 var attacks: BattleAttackSystem = null
+## How the real player's sends pick their recipient (BattleTargeting.Mode). RANDOM at the start of every
+## round: a new session is a new round and nothing carries over. Changed during the round with
+## `set_player_target_mode`; bots always use Random.
+var player_target_mode := BattleTargeting.Mode.RANDOM
 ## Whether new sessions run the attack system. Tests switch it off to compare with the attack-free model.
 static var default_attacks_enabled := true
 
@@ -86,6 +93,8 @@ func _init(seed_value_: int = 0) -> void:
 		contestants.append(c)
 	alive_count = CONTESTANT_COUNT
 	attacks = BattleAttackSystem.new(seed_value_, CONTESTANT_COUNT, default_attacks_enabled)
+	if attacks.enabled:
+		attacks.init_targets(self)
 
 func get_player() -> BattleContestant:
 	return contestants[PLAYER_ID]
@@ -127,6 +136,7 @@ func step() -> void:
 			knocked_out.append(c)
 	attacks.generate_bot_defeats(self, gains) # bots that are still in may defeat (and send) an enemy
 	_apply_kos(knocked_out)
+	attacks.update_targets(self) # the measure-following targets (the player's Lowest Time / Attackers) catch up with this tick
 
 # ---- inputs from the real player (via BattleHandler) ----
 
@@ -199,6 +209,43 @@ func report_incoming_kill(origin: PackedInt64Array, source: int) -> bool:
 		return false
 	var cause := BattleAttack.Resolution.DEFEATED_BY_PLAYER if source == BattleAttribution.Source.PLAYER else BattleAttack.Resolution.OTHER
 	return attacks.resolve_incoming(self, seq, cause, {"source": source})
+
+## Contestant `id`'s current target (an alive contestant other than itself), or -1: nobody else is in, `id` is
+## out, or the attack loop is off. While two or more are alive every alive contestant has one.
+func target_of(id: int) -> int:
+	return contestants[id].target_id
+
+## Every contestant's first target, as a copy: what each held before the first TARGET_CHANGED was logged.
+## A presentation made mid-round starts from this and replays the log (empty with the attack loop off).
+func initial_targets() -> PackedInt32Array:
+	return attacks.initial_targets.duplicate()
+
+## The survivors whose current target is `id`, in ascending id order (doc 47 B35-TARGET-007). `attackers_of(0)`
+## is "who is aiming at the real player right now".
+func attackers_of(id: int) -> Array[int]:
+	var out: Array[int] = []
+	for c in contestants:
+		if c.alive and c.target_id == id:
+			out.append(c.id)
+	return out
+
+## Selects how the real player's sends are aimed (BattleTargeting.Mode). Takes effect at once: the target is
+## re-evaluated now, and every later send uses the mode; sends already made are untouched. Returns false, and
+## changes nothing, for an unknown mode, one that is unavailable (Most Coins, until coin data exists), a
+## player who is out, a finished round or a round without the attack loop. Selecting the current mode is a
+## no-op that returns true.
+func set_player_target_mode(mode: int) -> bool:
+	if finished or not attacks.enabled or not get_player().alive or not target_mode_available(mode):
+		return false
+	if mode == player_target_mode:
+		return true
+	player_target_mode = mode
+	attacks.set_target(self, PLAYER_ID, attacks.targeting.reevaluate(self, PLAYER_ID))
+	return true
+
+## Whether the player can select `mode` right now.
+func target_mode_available(mode: int) -> bool:
+	return mode >= 0 and mode < BattleTargeting.Mode.size() and attacks.targeting.mode_available(self, mode)
 
 ## `id`'s unresolved incoming enemies (QUEUED and ACTIVE, in send order) as read-only copies.
 func get_incoming(id: int) -> Array[Dictionary]:
@@ -281,6 +328,7 @@ func _apply_kos(group: Array[BattleContestant]) -> void:
 		_log(EventType.KO, c.id, c.ko_cause)
 		attacks.on_contestant_out(self, c.id)
 	alive_count -= group.size()
+	attacks.after_kos(self) # whoever aimed at someone who went out re-targets on this same tick
 	if alive_count == 1:
 		for c in contestants:
 			if c.alive:
@@ -305,8 +353,12 @@ func snapshot() -> Dictionary:
 	var rows: Array = []
 	for c in contestants:
 		rows.append([c.alive, c.ko_tick, c.ko_cause, c.placement, c.levels_cleared, c.progress, c.power, c.time_left, c.skill, c.tiebreak])
+	var targets: Array = []
+	for c in contestants:
+		targets.append(c.target_id)
 	return {"tick": tick_count, "alive": alive_count, "finished": finished, "winner": winner_id,
-		"rng_state": rng.state, "rows": rows, "attacks": attacks.snapshot()}
+		"rng_state": rng.state, "rows": rows, "attacks": attacks.snapshot(),
+		"targets": targets, "player_target_mode": player_target_mode}
 
 func _finish(winner: int) -> void:
 	finished = true

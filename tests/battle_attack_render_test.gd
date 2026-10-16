@@ -201,11 +201,13 @@ func _run() -> void:
 	var layout: Dictionary = screen.layout
 	var game: Rect2 = layout.game
 
+	await test_target_reticle(layout)
 	await test_player_send(layout, game)
 	await test_bot_send(layout, game)
 	await test_incoming_in_preview(layout)
 	await test_player_incoming(layout, game)
 	await test_stress()
+	await test_target_reticle_ko(layout) # last: it KOs a contestant, which the sections above must not see
 
 	if added_pack != "":
 		packs.erase(added_pack)
@@ -224,6 +226,68 @@ func _run() -> void:
 	else:
 		print("All Battle attack render tests passed")
 	quit(1 if failures > 0 else 0)
+
+## Red as the reference's reticle: r > 225, g < 50, b < 70 (8 bits).
+func is_reticle_red(c: Color) -> bool:
+	return c.r > 225.0 / 255.0 and c.g < 50.0 / 255.0 and c.b < 70.0 / 255.0
+
+## How many of the four corner brackets of pane `id` are pure red at their arm's middle.
+func red_corners(img: Image, layout: Dictionary, id: int) -> int:
+	var n := 0
+	var rects: Array[Rect2] = load("res://Scripts/Classes/Battle/BattleTargetReticle.gd").corner_rects(layout.slots[id - 1])
+	for i in range(0, rects.size(), 2): # one horizontal arm per corner (0, 2, 4, 6)
+		var r: Rect2 = rects[i]
+		# (px() samples the centre of whole logical pixel (x, y): ask for the arm's own centre)
+		if is_reticle_red(px(img, r.position.x + r.size.x * 0.5 - 0.5, r.position.y + r.size.y * 0.5 - 0.5)):
+			n += 1
+	return n
+
+func test_target_reticle(layout: Dictionary) -> void:
+	print("-- the target reticle")
+	var t: int = session.target_of(0)
+	await frames(4)
+	var img := await grab("target_00_reticle")
+	check(t >= 1 and red_corners(img, layout, t) == 4, "the player's target pane (#%d) has a red bracket at all four corners" % t)
+	var others_red := 0
+	for id in range(1, 35):
+		if id != t:
+			others_red += red_corners(img, layout, id)
+	check(others_red == 0, "no other pane has one")
+	var rect: Rect2 = layout.slots[t - 1]
+	check(not is_reticle_red(px(img, rect.position.x + 1.5, rect.position.y + 1.5)), "the bracket is outside the pane, in the gap: the picture is not covered")
+	# it follows the player's mode (the times are equal, so one lower time decides)
+	var equal_time: int = session.get_player().time_left
+	var low := alive_between(18, 34, 3)
+	session.contestants[low].time_left = equal_time - 40
+	check(screen.select_target_mode(1) and session.target_of(0) == low, "(Lowest Time selected: #%d)" % low)
+	await frames(4)
+	var img2 := await grab("target_01_lowest_time")
+	check(red_corners(img2, layout, low) == 4 and (low == t or red_corners(img2, layout, t) == 0), "in Lowest Time the bracket moves to the lowest-time pane (#%d) and leaves the old one" % low)
+	session.contestants[low].time_left = equal_time
+	check(screen.select_target_mode(0) and session.player_target_mode == 0, "(Random selected again, times restored)")
+	await frames(3)
+
+## At the very end (it KOs a contestant, which the sections above must not see), once the stress test's lines are gone.
+func test_target_reticle_ko(layout: Dictionary) -> void:
+	print("-- the target reticle after a KO")
+	session.attacks.targeting = load("res://Scripts/Classes/Battle/BattleTargetingModes.gd").new() # the stock router (earlier sections installed test policies)
+	session.attacks.bots_send = false
+	screen.attack_view.clear_flights()
+	await frames(6)
+	var victim: int = session.target_of(0)
+	var img := await grab("target_02_before_ko")
+	check(victim >= 1 and red_corners(img, layout, victim) == 4, "the bracket is on the target (#%d)" % victim)
+	session.report_ko(victim, session.KoCause.HAZARD)
+	var next: int = session.target_of(0)
+	advance(1)
+	await frames(4)
+	var img3 := await grab("target_03_after_ko")
+	check(next != victim and next >= 1 and red_corners(img3, layout, next) == 4 and red_corners(img3, layout, victim) == 0, "when its pane is KO'd the bracket moves to #%d and none is left on the KO'd one" % next)
+	var shown := 0
+	for id in range(1, 35):
+		if red_corners(img3, layout, id) > 0:
+			shown += 1
+	check(shown == 1, "exactly one pane has a bracket")
 
 func test_player_send(layout: Dictionary, game: Rect2) -> void:
 	print("-- the real player's send")

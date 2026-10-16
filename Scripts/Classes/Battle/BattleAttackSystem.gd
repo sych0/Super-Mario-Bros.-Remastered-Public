@@ -52,7 +52,10 @@ var bots_send := true
 var pressure_enabled := true
 var bot_rng := RandomNumberGenerator.new()
 var player_rng := RandomNumberGenerator.new()
-var targeting: BattleTargeting = BattleTargetingRandomSurvivor.new()
+## Who each send goes to and who each contestant aims at: by default a router over the player's
+## four modes (bots always Random); a test can replace it with any BattleTargeting.
+var targeting: BattleTargeting = BattleTargetingModes.new()
+var initial_targets := PackedInt32Array() ## every contestant's first target, before any event (a presentation made mid-round replays from here)
 var next_seq := 0
 var defeats := 0 ## enemy defeats recorded this round (the next one's BattleAttack.defeat_seq)
 var player_defeats := 0 ## how many of them were the real player's
@@ -72,6 +75,46 @@ func _init(seed_value: int, contestant_count: int, enabled_ := true) -> void:
 ## The stream `sender`'s random draws come from.
 func rng_for(sender: int) -> RandomNumberGenerator:
 	return player_rng if sender == BattleSession.PLAYER_ID else bot_rng
+
+# ---- targets (doc 47 B35-TARGET-001 / 007) -----------------------------------------------------
+
+## Gives every contestant its first target, silently (no event, no random stream: see
+## BattleTargeting.initial). Called once by the session when it is created, with the attack loop on.
+func init_targets(session: BattleSession) -> void:
+	initial_targets.resize(session.contestants.size())
+	for c in session.contestants:
+		c.target_id = BattleTargeting.initial(session, c.id)
+		initial_targets[c.id] = c.target_id
+
+## Makes `new_target` contestant `id`'s target and logs TARGET_CHANGED (a = new, b = old) if it changed.
+func set_target(session: BattleSession, id: int, new_target: int) -> bool:
+	var c := session.contestants[id]
+	if c.target_id == new_target:
+		return false
+	var old := c.target_id
+	c.target_id = new_target
+	session.record(BattleSession.EventType.TARGET_CHANGED, id, new_target, old)
+	return true
+
+## Contestants went out (the session calls this once all of one tick's KOs are applied): the ones who
+## are out hold no target, and everyone whose target is gone re-targets on this same tick.
+func after_kos(session: BattleSession) -> void:
+	if not enabled or round_ended:
+		return
+	for c in session.contestants:
+		if not c.alive:
+			set_target(session, c.id, -1)
+		elif not BattleTargeting.is_valid_target(session, c.id, c.target_id) or session.alive_count < 2:
+			set_target(session, c.id, targeting.reevaluate(session, c.id))
+
+## End of a session tick: every contestant whose policy follows a measure (the player in Lowest Time,
+## Attackers or Most Coins) is re-evaluated. Random targets change only on a send or a KO.
+func update_targets(session: BattleSession) -> void:
+	if not enabled or round_ended:
+		return
+	for c in session.contestants:
+		if c.alive and targeting.is_continuous_for(session, c.id):
+			set_target(session, c.id, targeting.reevaluate(session, c.id))
 
 # ---- sending ---------------------------------------------------------------------------------
 
@@ -107,7 +150,7 @@ func _send(session: BattleSession, sender: int, kind: int, draw: float) -> Battl
 	defeats += 1
 	if sender == BattleSession.PLAYER_ID:
 		player_defeats += 1
-	var target := targeting.choose(session, sender, draw)
+	var target := targeting.on_send(session, sender, draw)
 	if target < 0 or not session.contestants[target].alive or target == sender:
 		session.record(BattleSession.EventType.ENEMY_DEFEATED, sender, kind, -1, {"defeat": defeat})
 		return null
@@ -124,6 +167,7 @@ func _send(session: BattleSession, sender: int, kind: int, draw: float) -> Battl
 	session.record(BattleSession.EventType.ENEMY_DEFEATED, sender, kind, attack.seq, {"defeat": defeat})
 	session.record(BattleSession.EventType.SENT, sender, attack.seq, target, {"kind": kind})
 	session.record(BattleSession.EventType.RECEIVED, target, attack.seq, sender, {"kind": kind})
+	set_target(session, sender, target) # the recipient is now the sender's persistent target
 	return attack
 
 ## The bots' defeat opportunities for this tick. `gains[id]` is how far bot `id` advanced this tick
@@ -291,5 +335,5 @@ func snapshot() -> Dictionary:
 		rows.append([d.seq, d.sender, d.target, d.kind, d.sent_tick, d.state, d.activated_tick, d.resolved_tick, d.resolution, d.defeat_seq, d.spawned_tick])
 	return {"enabled": enabled, "bots_send": bots_send, "pressure_enabled": pressure_enabled, "round_ended": round_ended,
 		"next_seq": next_seq, "defeats": defeats, "player_defeats": player_defeats, "defeat_sources": defeat_sources.duplicate(),
-		"incoming_kill_sources": incoming_kill_sources.duplicate(),
+		"incoming_kill_sources": incoming_kill_sources.duplicate(), "initial_targets": initial_targets.duplicate(),
 		"bot_rng_state": bot_rng.state, "player_rng_state": player_rng.state, "history": rows}

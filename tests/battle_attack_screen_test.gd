@@ -140,6 +140,7 @@ func _run() -> void:
 
 	await start_battle()
 	await test_wiring()
+	await test_target_reticle()
 	await test_player_send()
 	await test_bot_send()
 	await test_panes_and_previews()
@@ -192,6 +193,91 @@ func test_wiring() -> void:
 	check(sc.attack_layer.find_children("*", "", true, false).is_empty() and sc.attack_view.flights.is_empty(), "nothing is on screen before the first attack")
 	check(not sc.game_viewport.is_ancestor_of(sc.attack_layer) and not sc.game_viewport.is_ancestor_of(sc.incoming_strip), "no attack visual lives inside the game viewport")
 
+# ---- the target reticle and the PROVISIONAL mode keys (doc 47 M-T1) ------------------------------------------------
+
+func key_event(code: int) -> InputEventKey:
+	var ev := InputEventKey.new()
+	ev.physical_keycode = code
+	ev.keycode = code
+	ev.pressed = true
+	return ev
+
+func test_target_reticle() -> void:
+	print("-- the target reticle and the provisional mode keys")
+	var sc = screen()
+	var s = session()
+	var ret = sc.target_reticle
+	check(ret != null and ret.get_parent() == sc and not sc.game_viewport.is_ancestor_of(ret) and ret.size == Vector2(480, 270) and ret.mouse_filter == Control.MOUSE_FILTER_IGNORE, "the reticle is part of the Battle canvas, covers it and takes no input (not inside the game viewport)")
+	check(ret.get_index() > sc.panes[33].get_index() and ret.get_index() < sc.attack_layer.get_index(), "it is drawn over the opponent panes and under the attack lines")
+	await frames(3)
+	var t: int = s.target_of(0)
+	check(ret.visible and ret.target == t and t >= 1 and s.contestants[t].alive, "while playing it is on the player's target pane (#%d)" % t)
+	var shown := 0
+	for node in sc.find_children("TargetReticle", "", true, false):
+		if node.visible:
+			shown += 1
+	check(shown == 1 and sc.panes[t - 1].ko == false, "exactly one reticle, on a living pane")
+	# the mode keys
+	check(s.player_target_mode == BattleTargeting_Mode().RANDOM and sc.get_node("TargetModeReadout").text.contains("RANDOM") and sc.get_node("TargetModeReadout").text.contains("PROVISIONAL"), "the provisional readout says Random, and that it is provisional")
+	for i in range(1, 35):
+		s.contestants[i].time_left = 400
+	s.contestants[23].time_left = 90
+	root.push_input(key_event(KEY_I))
+	await frames(3)
+	check(s.player_target_mode == BattleTargeting_Mode().LOWEST_TIME and ret.target == 23, "the I key selects Lowest Time and the reticle goes to the lowest time (#23)")
+	check(sc.get_node("TargetModeReadout").text.contains("LOWEST TIME"), "the readout follows")
+	root.push_input(key_event(KEY_K))
+	await frames(3)
+	check(s.player_target_mode == BattleTargeting_Mode().ATTACKERS and ret.visible and ret.target == s.target_of(0), "the K key selects Attackers")
+	var before_mode: int = s.player_target_mode
+	root.push_input(key_event(KEY_L))
+	await frames(3)
+	check(s.player_target_mode == before_mode and sc.get_node("TargetModeReadout").text.contains("NOT AVAILABLE"), "the L key (Most Coins) is refused and the readout says it is not available yet")
+	var echo := key_event(KEY_J)
+	echo.echo = true
+	root.push_input(echo)
+	await frames(2)
+	check(s.player_target_mode == before_mode, "a held key (echo) does nothing")
+	root.push_input(key_event(KEY_J))
+	await frames(3)
+	check(s.player_target_mode == BattleTargeting_Mode().RANDOM, "the J key selects Random again")
+	# the pause menu: no changes while paused, and the state is untouched
+	var tick: int = s.tick_count
+	G.game_paused = true
+	paused = true # what the pause menu does: the tree stops, and with it the Battle clock
+	check(not sc.select_target_mode(BattleTargeting_Mode().LOWEST_TIME) and s.player_target_mode == BattleTargeting_Mode().RANDOM, "a mode cannot be selected while the game is paused")
+	await frames(30)
+	check(s.tick_count == tick and s.player_target_mode == BattleTargeting_Mode().RANDOM and s.target_of(0) == ret.target, "pausing leaves the mode, the target and the reticle as they were")
+	paused = false
+	G.game_paused = false
+	# a KO of the target moves the reticle at once and it is never on the KO pane
+	var victim: int = s.target_of(0)
+	s.report_ko(victim, SESSION.KoCause.HAZARD)
+	await frames(3)
+	check(ret.target != victim and ret.target == s.target_of(0) and ret.visible, "when the target is KO'd the reticle moves on with it (#%d -> #%d)" % [victim, ret.target])
+	var on_ko := false
+	for i in range(0, 120):
+		await process_frame
+		if ret.visible and (not s.contestants[ret.target].alive or sc.panes[ret.target - 1].ko):
+			on_ko = true
+	check(not on_ko, "over two seconds the reticle is never on a KO'd pane")
+	# the reticle only shows while the round is being set up or played
+	var live_state: int = rnd().state
+	var states_ok := true
+	for st in [ROUND.State.LOADING, ROUND.State.ROUND_OVER, ROUND.State.RESULTS]:
+		rnd().state = st
+		if sc._reticle_target() != 0:
+			states_ok = false
+	rnd().state = ROUND.State.PRE_ROUND
+	var in_pre_round: bool = sc._reticle_target() == s.target_of(0) and sc._reticle_target() > 0
+	rnd().state = live_state
+	check(states_ok and in_pre_round and sc._reticle_target() == s.target_of(0), "it shows in PRE_ROUND (on the target during the countdown) and PLAYING, and never in LOADING, ROUND_OVER or RESULTS")
+	s.set_player_target_mode(BattleTargeting_Mode().RANDOM)
+
+## BattleTargeting.Mode, reached through load() (a `-s` script is compiled before the project's classes exist).
+func BattleTargeting_Mode():
+	return load("res://Scripts/Classes/Battle/BattleTargeting.gd").Mode
+
 # ---- the real player's send ------------------------------------------------------------------------------------
 
 func test_player_send() -> void:
@@ -209,6 +295,8 @@ func test_player_send() -> void:
 	check(view.flights[0].target == a.target and a.target == target and view.flights[0].kind == TYPES.Kind.GOOMBA,
 		"it is aimed at the authoritative recipient (#%d) and carries a Goomba" % target)
 	check(view.marked_ids() == [target] and view.target_strength(target) > 0.9, "that opponent's pane is the marked target")
+	await process_frame
+	check(sc.target_reticle.target == target and sc.target_reticle.visible, "and the reticle is on it: the player's target is the recipient of the send")
 	var layer_rect: Rect2 = sc.layout.slots[target - 1]
 	var landing: Vector2 = load("res://Scripts/Classes/Battle/BattleAttackGeometry.gd").landing_point(sc.layout, 0, target)
 	check(layer_rect.has_point(landing) and sc.attack_layer.view == view, "the layer draws its line to a point inside that pane")
@@ -410,6 +498,7 @@ func test_round_restart() -> void:
 		if not sc.driver.tracks[id].invaders.is_empty():
 			tracks_clean = false
 	check(tracks_clean and sc.driver.session == session(), "and no preview keeps an incoming enemy (its tracks are the new round's)")
+	check(session().player_target_mode == BattleTargeting_Mode().RANDOM and sc.target_reticle.target == session().target_of(0) and sc.target_reticle.visible, "the new round starts in Random with the reticle on its own first target")
 	quiet_bots()
 
 # ---- attacks off -----------------------------------------------------------------------------------------------------
@@ -425,6 +514,7 @@ func test_attacks_off() -> void:
 	await frames(10)
 	var sc = screen()
 	check(not session().attacks.enabled and sc.attack_view == null, "with the attack loop off there is no attack presentation")
+	check(not sc.target_reticle.visible and sc.get_node("TargetModeReadout").text == "" and not session().set_player_target_mode(BattleTargeting_Mode().LOWEST_TIME), "...no reticle, no mode readout, and no mode to select")
 	check(sc.incoming_strip.rows.is_empty() and sc.attack_layer.view == null, "and the strip and the layer show nothing")
 	await frames(60 * 5)
 	check(session().events.filter(func(e): return e.type >= SESSION.EventType.SENT).is_empty() and sc.attack_view == null, "five seconds of play produce no attack events and no visuals")

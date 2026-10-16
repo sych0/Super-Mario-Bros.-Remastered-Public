@@ -150,7 +150,8 @@ func _run() -> void:
 			if is_sky(px(img, x, y)):
 				sky_outside += 1
 	check(sky_outside == 0, "no level sky anywhere around the window (%d sampled pixels)" % sky_outside)
-	check(near(px(img, 240, 247), STRIP_A_BAR) and near(px(img, 240, 259), BS.STRIP_B_COLOR), "the two strips sit under the window (strip A carries the incoming bar)")
+	# (strip B carries the small provisional targeting readout in its middle, so its colour is sampled at both ends)
+	check(near(px(img, 240, 247), STRIP_A_BAR) and near(px(img, 118, 259), BS.STRIP_B_COLOR) and near(px(img, 362, 259), BS.STRIP_B_COLOR), "the two strips sit under the window (strip A carries the incoming bar)")
 	# -- HUD over the window -----------------------------------------------------------------------
 	# (the right edge is not checked: without translations the sandbox's long locale key can run past it)
 	var hud_in := 0

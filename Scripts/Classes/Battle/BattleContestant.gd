@@ -22,6 +22,9 @@ var tiebreak := 0
 # Reserved for later phases; not interpreted yet.
 var ko_by := -1
 var incoming := 0
+
+## Who this contestant is aiming at right now: an alive contestant other than itself, or -1 (nobody else
+## is in, it is out, or the attack loop is off). Owned by BattleAttackSystem (doc 47 B35-TARGET-001).
 var target_id := -1
 
 ## True if this contestant out-ranks `other` while both are still in the running.

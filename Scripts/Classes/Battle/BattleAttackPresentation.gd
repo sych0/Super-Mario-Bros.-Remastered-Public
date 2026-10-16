@@ -58,6 +58,7 @@ var _last_activated := -1.0e9
 var _last_activated_seq := -1
 var _resolved_recent: Array[Dictionary] = [] ## the real player's attacks that just ended, for the strip's fade
 var _animate_until := 0.0 ## presentation clock until which something timed (a flash, a fade) is still running
+var _targets := PackedInt32Array() ## every contestant's current target as presented: the session's initial targets, moved by TARGET_CHANGED
 
 ## A presentation of `session`'s attacks. Attacks that already happened (a presentation created
 ## mid-round) are replayed silently: they fill the counts and the incoming list but draw no lines.
@@ -68,6 +69,8 @@ func _init(session_: BattleSession) -> void:
 	_active.resize(n)
 	for i in n:
 		_open.append([] as Array[int])
+	_targets = session.initial_targets()
+	_targets.resize(n) # (empty with the attack loop off: nobody has a target)
 	_consume(true)
 
 ## Advances the presentation clock by `delta` seconds and reads the events logged since last time.
@@ -78,6 +81,14 @@ func update(delta: float) -> void:
 	_prune()
 	_prune_resolved()
 	update_us = Time.get_ticks_usec() - t0
+
+## Contestant `id`'s target as the presentation has caught up with it (-1: none).
+func target_of(id: int) -> int:
+	return _targets[id] if id >= 0 and id < _targets.size() else -1
+
+## The real player's current target, as presented: where the reticle is (-1: none).
+var player_target: int:
+	get: return target_of(BattleSession.PLAYER_ID)
 
 ## Forgets everything on screen (lines, flashes). The counts stay: they mirror the session.
 func clear_flights() -> void:
@@ -104,6 +115,8 @@ func _consume(silent: bool) -> void:
 				_on_resolved(int(e.a), int(e.cause), int(e.tick), silent)
 			BattleSession.EventType.INCOMING_SPAWNED:
 				_on_spawned(int(e.a))
+			BattleSession.EventType.TARGET_CHANGED:
+				_targets[int(e.id)] = int(e.a) # not a trace event: targets are shown, not replayed as lines
 
 func _note(type: int, seq: int, sender: int, target: int, kind: int, cause := 0) -> void:
 	trace_count += 1

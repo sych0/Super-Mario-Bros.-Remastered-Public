@@ -32,6 +32,17 @@ const BADGE_TEXT := Color(0.25, 0.14, 0.06, 1)
 const OVERLAY_LAYER := 90
 const FREEZE_DELAY_FRAMES := 3 ## frames a fresh level runs before the pre-round freezes it (camera and Mario settle)
 const MAX_PRESENTATION_STEP := 0.1 ## a long frame (a hitch, a stalled window) advances the attack lines by at most this
+## PROVISIONAL (doc 47 question Q5, the controller mapping of the targeting selector, is open; this is not the
+## shipping control scheme and has no gamepad binding): the four keys of an IJKL cross select the player's
+## targeting mode, laid out like SMB35's selector cross (up Lowest Time, left Random, right Most Coins, down
+## Attackers). They are read here, never through the game's InputMap, so no setting or other mode is touched.
+const PROVISIONAL_MODE_KEYS := {
+	KEY_I: BattleTargeting.Mode.LOWEST_TIME,
+	KEY_J: BattleTargeting.Mode.RANDOM,
+	KEY_L: BattleTargeting.Mode.MOST_COINS,
+	KEY_K: BattleTargeting.Mode.ATTACKERS,
+}
+const MODE_NOTE_SECONDS := 2.5 ## how long "NOT AVAILABLE YET" replaces the mode readout
 
 ## Emitted once a game scene (LevelTransition, a level, ...) has been added to GameViewport.
 signal game_scene_changed(scene: Node)
@@ -54,6 +65,7 @@ var driver: BattlePreviewDriver = null ## drives the live previews (all 34 on Wo
 var attack_view: BattleAttackPresentation = null ## the visible side of this session's attack loop (a reader of its events; null when attacks are off)
 var attack_layer: BattleAttackLayer = null ## the lines and target marks over the canvas
 var incoming_strip: BattleIncomingStrip = null ## the real player's incoming enemies, in strip A
+var target_reticle: BattleTargetReticle = null ## the red bracket on the real player's current target pane
 var debug_view: TextureRect = null ## dev only: opponent #1's atlas cell at native size over the window
 var audio_listener: AudioListener2D = null
 var battle_round := BattleRound.new() ## the round lifecycle; the same object for every round of this Battle
@@ -76,6 +88,9 @@ var _applied_visuals := -1
 var _freeze_stretch := TextureRect.STRETCH_SCALE
 var _warned_root_camera := false
 var _attack_session: BattleSession = null ## the session the attack presentation was last set up for
+var _target_label := Label.new() ## PROVISIONAL readout of the player's targeting mode, in strip B
+var _mode_note := "" ## a short message that replaces the readout (a mode that is not available)
+var _mode_note_until := 0 ## Time.get_ticks_msec() until which it shows
 
 # ---- static API used by the rest of the game -------------------------------------------------
 
@@ -310,6 +325,14 @@ func _build(l: Dictionary) -> void:
 	_total_label.text = "/%d" % BattleSession.CONTESTANT_COUNT
 	for label in [_course_label, _alive_label, _total_label]:
 		label.add_theme_color_override("font_color", BADGE_TEXT)
+	# The target reticle sits over the panes and under the attack lines.
+	target_reticle = BattleTargetReticle.new(l)
+	add_child(target_reticle)
+	# PROVISIONAL readout of the targeting mode and its keys, in strip B (plain gold until coins and items).
+	_place(_target_label, l.strip_b, 0.6)
+	_target_label.add_theme_color_override("font_color", BADGE_TEXT)
+	_target_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_target_label.name = "TargetModeReadout"
 	# The attack lines fly over everything on the canvas (the results and banner sit on a higher layer).
 	attack_layer = BattleAttackLayer.new(l)
 	add_child(attack_layer)
@@ -504,6 +527,8 @@ func _bind_attack_view() -> void:
 ## Everything the attack presentation put on screen goes: lines, marks, pane markers, strip icons.
 func _clear_attack_view() -> void:
 	attack_view = null
+	target_reticle.set_target(0)
+	_target_label.text = ""
 	attack_layer.bind(null, null)
 	incoming_strip.bind(null, null)
 	for pane in panes:
@@ -524,6 +549,8 @@ func refresh() -> void:
 		incoming_strip.assets = art
 	attack_layer.sync()
 	incoming_strip.sync()
+	target_reticle.set_target(_reticle_target())
+	_refresh_target_readout()
 	var p := session.get_player()
 	var speed := "" if BattleHandler.sim_speed() == 1 else " X%d" % BattleHandler.sim_speed()
 	_time_label.text = "TIME %03d%s" % [maxi(p.time_left, 0), speed]
@@ -532,6 +559,58 @@ func refresh() -> void:
 	_course_label.text = "%d-%d" % [session.world, session.level]
 
 # ---- round lifecycle (doc 38, section 7) -----------------------------------------------------------
+
+# ---- the player's target: reticle, mode selection (doc 47 M-T1) -------------------------------------
+
+## The opponent the reticle is on right now (1..34), or 0 for none: only while the round is being set up
+## or played, two or more are in, the player is in, and never on a pane that already shows its KO card.
+func _reticle_target() -> int:
+	if attack_view == null or session == null:
+		return 0
+	var state := battle_round.state
+	if state != BattleRound.State.PRE_ROUND and state != BattleRound.State.PLAYING:
+		return 0
+	if session.alive_count < 2 or not session.get_player().alive:
+		return 0
+	var t := attack_view.player_target
+	if t < 1 or t > BattleHudLayout.OPPONENTS or not session.contestants[t].alive or panes[t - 1].ko:
+		return 0
+	return t
+
+## PROVISIONAL: the current mode and its keys, in strip B. A note (a mode that is not available) replaces it
+## for a moment. Written only when the text changes.
+func _refresh_target_readout() -> void:
+	var text := ""
+	if attack_view != null and session != null:
+		if _mode_note != "" and Time.get_ticks_msec() < _mode_note_until:
+			text = _mode_note
+		else:
+			_mode_note = ""
+			text = "TARGET: %s   [I J K L: MODE, PROVISIONAL]" % BattleTargeting.mode_name(session.player_target_mode).replace("_", " ")
+	if text != _target_label.text:
+		_target_label.text = text
+
+## Selects the real player's targeting mode (BattleTargeting.Mode). Only while the round is set up or being
+## played and the game is not paused. Returns whether the session accepted it; a mode that is not available
+## (Most Coins, until coin data exists) leaves the mode alone and says so in the readout.
+func select_target_mode(mode: int) -> bool:
+	var session_now := BattleSession.current
+	if session_now == null or get_tree().paused or Global.game_paused:
+		return false
+	var state := battle_round.state
+	if state != BattleRound.State.PRE_ROUND and state != BattleRound.State.PLAYING:
+		return false
+	if session_now.set_player_target_mode(mode):
+		_mode_note = ""
+		return true
+	if not session_now.target_mode_available(mode):
+		_mode_note = "%s: NOT AVAILABLE YET" % BattleTargeting.mode_name(mode).replace("_", " ")
+		_mode_note_until = Time.get_ticks_msec() + int(MODE_NOTE_SECONDS * 1000.0)
+	return false
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and PROVISIONAL_MODE_KEYS.has((event as InputEventKey).physical_keycode):
+		select_target_mode(PROVISIONAL_MODE_KEYS[(event as InputEventKey).physical_keycode])
 
 ## Whether the attack presentation clock is held: exactly when the Battle clock is (the tree is paused
 ## or the game window is frozen), since BattleHandler, which drives that clock, is pausable inside it.

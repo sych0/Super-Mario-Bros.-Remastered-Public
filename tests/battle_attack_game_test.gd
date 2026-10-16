@@ -122,6 +122,7 @@ func _run() -> void:
 	await test_player_defeats()
 	await test_incoming_to_player()
 	await test_round_isolation()
+	await test_targeting_modes()
 	await test_classic()
 
 	ROUND.pre_round_override = -1.0
@@ -428,6 +429,47 @@ func test_round_isolation() -> void:
 	check(clean and fresh.seed_value != old_seed, "the new round has no queues, active attacks, sequence numbers or attack history")
 	check(fresh.attacks.enabled and fresh.attacks.bots_send and fresh.attacks.targeting != old.attacks.targeting, "...and its own, default attack system")
 	old = null
+
+# ---- the player's targeting mode, on real kills (doc 47 M-T1) ------------------------------------------------------
+
+func test_targeting_modes() -> void:
+	print("-- real kills are sent to the selected target")
+	var s = session()
+	var mode = load("res://Scripts/Classes/Battle/BattleTargeting.gd").Mode
+	s.attacks.bots_send = false
+	s.attacks.pressure_enabled = false
+	var p := player()
+	var goombas := enemies(GOOMBA_SCRIPT)
+	check(s.player_target_mode == mode.RANDOM and goombas.size() >= 4, "a fresh round is in Random mode, with Goombas to stomp")
+	for id in range(1, 35):
+		s.contestants[id].time_left = 580
+	var low := alive_bot(14)
+	s.contestants[low].time_left = 120
+	check(BS.instance.select_target_mode(mode.LOWEST_TIME) and s.player_target_mode == mode.LOWEST_TIME and s.target_of(0) == low, "selecting Lowest Time aims at the lowest-time opponent (#%d)" % low)
+	await frames(60)
+	check(s.player_target_mode == mode.LOWEST_TIME and BS.instance.target_reticle.target == low, "the mode and the reticle hold while the game runs")
+	var sent_before: int = s.attacks.history.size()
+	goombas[0].stomped_on(p)
+	check(s.attacks.history.size() == sent_before + 1 and s.attacks.history[-1].sender == 0 and s.attacks.history[-1].target == low and s.target_of(0) == low, "a real stomp sends its enemy to that opponent, and the target stays")
+	goombas[1].die_from_object(p)
+	check(s.attacks.history[-1].target == low and s.attacks.history.size() == sent_before + 2, "so does the next kill")
+	# Attackers: an opponent that aims at the player
+	var attacker := alive_bot(6)
+	s.contestants[attacker].target_id = 0
+	check(BS.instance.select_target_mode(mode.ATTACKERS) and s.attackers_of(0).has(attacker), "an opponent aiming at the player becomes an attacker")
+	await frames(70) # a Battle second passes: the target catches up
+	check(s.target_of(0) == s.attackers_of(0)[0], "Attackers aims at an actual attacker (#%d)" % s.target_of(0))
+	var aimed: int = s.target_of(0)
+	goombas[2].die_from_hammer(p)
+	check(s.attacks.history[-1].target == aimed, "a kill goes to the attacker")
+	# Random again
+	check(BS.instance.select_target_mode(mode.RANDOM), "back to Random")
+	goombas[3].damage(p)
+	var last = s.attacks.history[-1]
+	check(last.target == s.target_of(0) and last.target >= 1 and last.target != 0 and s.contestants[last.target].alive, "a Random send goes to a living opponent and becomes the target")
+	check(BS.instance.select_target_mode(mode.MOST_COINS) == false and s.player_target_mode == mode.RANDOM, "Most Coins is refused: there is no coin data yet")
+	await frames(60)
+	check(s.attacks.history.all(func(h): return h.sender != 0 or h.target != 0), "no send of the player's ever went to the player")
 
 # ---- Classic is untouched --------------------------------------------------------------------------------------------
 

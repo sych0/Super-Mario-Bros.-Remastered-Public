@@ -845,7 +845,11 @@ func test_enabled_disabled() -> void:
 	var on = results.on
 	var idle = results.idle
 	check(off.events.filter(func(e): return e.type >= E.ENEMY_DEFEATED).is_empty() and off.attacks.history.is_empty(), "with attacks off there are no attack events and no attacks")
-	check(idle.events == off.events and idle.rng.state == off.rng.state and idle.tick_count == off.tick_count and idle.winner_id == off.winner_id, "with the machinery on but nothing sent, the match is bit-identical to the attack-free one (the bots' own random stream is untouched)")
+	# Persistent targets (doc 47 M-T1) are bookkeeping, not a send: with the loop on, contestants re-target when
+	# their target goes out, and that is logged as TARGET_CHANGED. Nothing else may differ from the attack-free log.
+	var idle_events: Array = idle.events.filter(func(e): return e.type != E.TARGET_CHANGED)
+	check(idle_events == off.events and idle.events.any(func(e): return e.type == E.TARGET_CHANGED) and off.events.filter(func(e): return e.type == E.TARGET_CHANGED).is_empty(), "with the machinery on but nothing sent, the match is bit-identical to the attack-free one apart from the targets' own TARGET_CHANGED bookkeeping")
+	check(idle.rng.state == off.rng.state and idle.tick_count == off.tick_count and idle.winner_id == off.winner_id and idle.snapshot().rows == off.snapshot().rows, "...the bots' own random stream, the match length, the winner and every contestant's outcome are exactly the attack-free ones")
 	var differ := 0
 	for seed_value in 30:
 		var a = S.new(seed_value)
