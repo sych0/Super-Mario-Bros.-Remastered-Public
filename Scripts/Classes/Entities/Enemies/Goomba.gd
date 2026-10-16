@@ -45,6 +45,7 @@ func hit(object: Node2D) -> void:
 	$BasicEnemyMovement.move_speed *= move_speed_mult_on_hit
 
 func enemy_death(player: Player):
+	report_battle_defeat()
 	if stomp_death_style == 0:
 		can_move = false
 		$BasicEnemyMovement.can_move = false

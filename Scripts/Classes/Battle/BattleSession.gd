@@ -10,7 +10,8 @@ extends RefCounted
 enum KoCause {NONE, HAZARD, TIME, FORFEIT}
 ## Things that happened to a contestant. Derived from state changes only (never from the rng),
 ## so recording them cannot change a match. Used by the opponent previews to stage outcomes.
-enum EventType {HIT, POWER_UP, LEVEL_CLEAR, KO}
+## The attack events (ENEMY_DEFEATED onwards) are written by BattleAttackSystem.
+enum EventType {HIT, POWER_UP, LEVEL_CLEAR, KO, ENEMY_DEFEATED, SENT, RECEIVED, INCOMING_ACTIVATED, INCOMING_RESOLVED}
 
 const CONTESTANT_COUNT := 35
 const PLAYER_ID := 0
@@ -31,7 +32,17 @@ var world := 1
 var level := 1
 ## Append-only event log: {tick, id, type (EventType), a, b}.
 ## HIT: a = new power. POWER_UP: a = new power. LEVEL_CLEAR: a = levels cleared. KO: a = KoCause.
+## Attack events (id = the contestant they happened to; `kind` = BattleEnemyType.Kind):
+##   ENEMY_DEFEATED  id = the defeater, a = kind, b = the attack's seq (-1 if there was nobody to send it to)
+##   SENT            id = sender,   a = seq, b = target, kind
+##   RECEIVED        id = target,   a = seq, b = sender, kind (the same moment as SENT, from the target's side)
+##   INCOMING_ACTIVATED  id = target, a = seq, b = sender, kind
+##   INCOMING_RESOLVED   id = target, a = seq, b = sender, kind, ko = true if it ended because the target was eliminated
 var events: Array[Dictionary] = []
+## The enemy send / receive loop of this round (state, queues, targeting, its own random stream).
+var attacks: BattleAttackSystem = null
+## Whether new sessions run the attack system. Tests switch it off to compare with the attack-free model.
+static var default_attacks_enabled := true
 
 ## Creates a fresh match and makes it the current one. Nothing is inherited from before.
 static func begin(seed_value_: int) -> BattleSession:
@@ -61,6 +72,7 @@ func _init(seed_value_: int = 0) -> void:
 		c.tiebreak = ranks[i]
 		contestants.append(c)
 	alive_count = CONTESTANT_COUNT
+	attacks = BattleAttackSystem.new(seed_value_, CONTESTANT_COUNT, default_attacks_enabled)
 
 func get_player() -> BattleContestant:
 	return contestants[PLAYER_ID]
@@ -70,6 +82,11 @@ func step() -> void:
 	if finished:
 		return
 	tick_count += 1
+	attacks.step(self) # incoming enemies activate / expire first, so this tick's bots feel them
+	var gains: Array = []
+	if attacks.enabled:
+		gains.resize(CONTESTANT_COUNT)
+		gains.fill(0.0)
 	var knocked_out: Array[BattleContestant] = []
 	for c in contestants:
 		if not c.alive:
@@ -78,7 +95,10 @@ func step() -> void:
 		if c.is_bot:
 			var power_before := c.power
 			var cleared_before := c.levels_cleared
-			cause = BattleBotSimulator.step_bot(c, tick_count, rng)
+			var distance_before := c.levels_cleared + c.progress
+			cause = BattleBotSimulator.step_bot(c, tick_count, rng, attacks.pressure(c.id))
+			if attacks.enabled and cause == KoCause.NONE:
+				gains[c.id] = c.levels_cleared + c.progress - distance_before
 			if c.power < power_before:
 				_log(EventType.HIT, c.id, c.power)
 			if c.levels_cleared > cleared_before:
@@ -92,6 +112,7 @@ func step() -> void:
 		if cause != KoCause.NONE:
 			c.ko_cause = cause
 			knocked_out.append(c)
+	attacks.generate_bot_defeats(self, gains) # bots that are still in may defeat (and send) an enemy
 	_apply_kos(knocked_out)
 
 # ---- inputs from the real player (via BattleHandler) ----
@@ -113,6 +134,26 @@ func report_level_complete() -> void:
 		p.levels_cleared += 1
 		p.progress = 0.0
 		_log(EventType.LEVEL_CLEAR, PLAYER_ID, p.levels_cleared)
+
+## `id` defeated an enemy of BattleEnemyType.Kind `kind` (the real player through the game's kill
+## path). Returns the attack that was sent, or null if none was (see BattleAttackSystem.report_defeat).
+func report_enemy_defeat(id: int, kind: int) -> BattleAttack:
+	return attacks.report_defeat(self, id, kind)
+
+## The real player defeated an enemy whose game script is at `script_path` (called by
+## Enemy.report_battle_defeat, in Battle only). The enemy is turned into a plain BattleEnemyType.Kind
+## here, at the edge, and only that goes on; unsupported enemies (shells, plants, bosses) are ignored.
+## The session decides everything else (whether anything is sent, and to whom). No-op without a
+## current session.
+static func report_player_defeat(script_path: String) -> BattleAttack:
+	var kind := BattleEnemyType.kind_for_script(script_path)
+	if current == null or kind == BattleEnemyType.Kind.NONE:
+		return null
+	return current.report_enemy_defeat(PLAYER_ID, kind)
+
+## `id`'s unresolved incoming enemies (QUEUED and ACTIVE, in send order) as read-only copies.
+func get_incoming(id: int) -> Array[Dictionary]:
+	return attacks.incoming(id)
 
 ## KOs a contestant now. Ignored if they are already out or the match is over.
 func report_ko(id: int, cause: KoCause) -> void:
@@ -152,6 +193,7 @@ func _apply_kos(group: Array[BattleContestant]) -> void:
 		c.ko_tick = tick_count
 		c.placement = best_place + i
 		_log(EventType.KO, c.id, c.ko_cause)
+		attacks.on_contestant_out(self, c.id)
 	alive_count -= group.size()
 	if alive_count == 1:
 		for c in contestants:
@@ -162,7 +204,14 @@ func _apply_kos(group: Array[BattleContestant]) -> void:
 		_finish(group[0].id)
 
 func _log(type: EventType, id: int, a := 0, b := 0) -> void:
-	events.append({"tick": tick_count, "id": id, "type": type, "a": a, "b": b})
+	record(type, id, a, b)
+
+## Appends an event stamped with the current tick. `extra` adds named fields (the attack events'
+## `kind` and `ko`).
+func record(type: int, id: int, a := 0, b := 0, extra := {}) -> void:
+	var e := {"tick": tick_count, "id": id, "type": type, "a": a, "b": b}
+	e.merge(extra)
+	events.append(e)
 
 ## Everything that decides a match, as plain data (for determinism checks). Includes the rng
 ## state, so any hidden extra rng use shows up.
@@ -171,7 +220,7 @@ func snapshot() -> Dictionary:
 	for c in contestants:
 		rows.append([c.alive, c.ko_tick, c.ko_cause, c.placement, c.levels_cleared, c.progress, c.power, c.time_left, c.skill, c.tiebreak])
 	return {"tick": tick_count, "alive": alive_count, "finished": finished, "winner": winner_id,
-		"rng_state": rng.state, "rows": rows}
+		"rng_state": rng.state, "rows": rows, "attacks": attacks.snapshot()}
 
 func _finish(winner: int) -> void:
 	finished = true

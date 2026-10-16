@@ -43,6 +43,9 @@ func _initialize() -> void:
 	T = load("res://Scripts/Classes/Battle/BattlePreviewTrack.gd")
 	R = load("res://Scripts/Classes/Battle/BattlePreviewResolver.gd")
 	C = load("res://Scripts/Classes/Battle/BattleCourse.gd")
+	# The golden hashes and the staged matches below are those of the attack-free model: the previews
+	# are tested against it, and the attack loop has its own tests (battle_attack_test.gd).
+	S.default_attacks_enabled = false
 	test_course()
 	var sk = test_sketch()
 	test_resolver()
@@ -55,6 +58,7 @@ func _initialize() -> void:
 	test_determinism()
 	test_fallback_and_hud()
 	await test_hud_integration()
+	S.default_attacks_enabled = true
 	if failures > 0:
 		printerr("%d Battle preview test(s) failed" % failures)
 	else:

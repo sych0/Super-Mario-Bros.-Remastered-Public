@@ -10,6 +10,18 @@ signal killed(direction: int)
 var direction := -1
 var bounced := false
 var ignore_flag_die := false
+var _battle_defeat_reported := false
+
+## Battle only: tells Battle this enemy was defeated by the real player. The one place the game's
+## kill paths report to Battle (die, die_from_object, die_from_hammer below, Goomba's stomp and
+## Koopa's stomp / block hit turning into a shell). Reports at most once per enemy and does
+## nothing outside Battle. Only the enemy's script path leaves here: Battle turns it into a plain
+## enemy kind (BattleSession.report_player_defeat).
+func report_battle_defeat() -> void:
+	if _battle_defeat_reported or Global.current_game_mode != Global.GameMode.BATTLE:
+		return
+	_battle_defeat_reported = true
+	BattleSession.report_player_defeat((get_script() as Script).resource_path)
 
 func _enter_tree() -> void:
 	add_to_group("Enemies")
@@ -22,6 +34,7 @@ func apply_enemy_gravity(delta: float) -> void:
 	velocity.y = clamp(velocity.y, -INF, Global.entity_max_fall_speed)
 
 func die() -> void:
+	report_battle_defeat()
 	killed.emit([-1, 1].pick_random())
 	DiscoLevel.combo_amount += 1
 	DiscoLevel.combo_meter = 100
@@ -35,6 +48,7 @@ func bounce_from_object(obj: Node2D) -> void:
 	velocity = Vector2(64, -160)
 
 func die_from_object(obj: Node2D) -> void:
+	report_battle_defeat()
 	var dir = sign(global_position.x - obj.global_position.x)
 	if dir == 0:
 		dir = [-1, 1].pick_random()
@@ -52,6 +66,7 @@ func flag_die() -> void:
 				score_note_adder.spawn_note(500)
 
 func die_from_hammer(obj: Node2D) -> void:
+	report_battle_defeat()
 	var dir = sign(global_position.x - obj.global_position.x)
 	if dir == 0:
 		dir = [-1, 1].pick_random()

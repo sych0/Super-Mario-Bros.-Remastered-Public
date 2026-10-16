@@ -81,6 +81,7 @@ func block_bounced() -> void:
 func summon_shell(flipped := false, launch := false) -> void:
 	if is_queued_for_deletion():
 		return
+	report_battle_defeat() # stomped or bumped from below: the Koopa is out of the fight (its shell is not a new enemy)
 	DiscoLevel.combo_amount += 1
 	var shell = load(shell_scene).instantiate()
 	%SpriteSetter.copy_meta(shell.get_node("%ResourceSetter"))
