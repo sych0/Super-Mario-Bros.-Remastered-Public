@@ -23,6 +23,9 @@ var pose_index := 0
 
 ## Each entry: [BattlePreviewSprite, world x, world y, flip(bool)]
 var actors: Array = []
+## Incoming enemies of authoritative attacks (BattlePreviewInvader), drawn over the run. Each entry:
+## {seq, kind, sprite: BattlePreviewSprite, x, y (world feet), vanish (0 = fully there, 0..1 while blinking out)}
+var invaders: Array = []
 var flag_y := -151.0
 var flag_visible := false
 var fade := 0.0 ## 0..1 black
@@ -35,4 +38,6 @@ func signature() -> String:
 		int(mario_visible), flag_y, fade, int(ko_overlay), displayed_course])
 	for a in actors:
 		parts.append("%.2f,%.2f,%d" % [a[1], a[2], int(a[3])])
+	for inv in invaders: # absent in every run without attacks, so those signatures are unchanged
+		parts.append("i%d,%d,%.2f,%.2f,%.2f" % [inv.seq, inv.kind, inv.x, inv.y, inv.vanish])
 	return ";".join(parts)

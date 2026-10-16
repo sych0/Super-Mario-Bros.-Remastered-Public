@@ -10,6 +10,14 @@ extends RefCounted
 ## authoritative HIT / KO / LEVEL_CLEAR events (an enemy walks in, Mario falls short of a pit,
 ## the flagpole). There is no collision response, no player input and no pathfinding.
 ## It never writes anything back into the session and never touches the session's rng.
+##
+## Incoming enemies (the visible side of an authoritative attack): an INCOMING_ACTIVATED event for
+## this opponent makes a BattlePreviewInvader of the attack's kind at the edge of the view, ahead of
+## Mario, when the picture's clock reaches the event's tick; the matching INCOMING_RESOLVED event
+## (same sequence id) ends it. Invaders are drawn on top of the run and are nothing else: they are not
+## in `enemies`, Mario never stomps or meets them, and they can never cause a HIT or a KO. Only the
+## authoritative events decide when one exists; the picture's own KO (`_end_ko`) and the level's end
+## (`_grab_pole`) merely clear what is still on screen.
 
 enum Phase {RUN, DYING, FALLING, KO, FLAG, WALK_OUT, DONE}
 enum EnemyState {WALK, STOMPED, SHELL, SLIDE}
@@ -26,6 +34,14 @@ const KILL_Y := 80.0 ## below this a falling Mario is gone
 const FATAL_JUMP_SCALE := 0.55 ## a doomed pit jump covers this much of its distance
 const POLE_SLIDE_SPEED := 100.0
 const CASTLE_WALK_SPEED := 55.0
+const INVADER_APPROACH := 44.0 ## px/s an incoming enemy closes in on Mario
+const INVADER_MARGIN := 14.0 ## it appears this far beyond the right edge of the view
+const INVADER_CLOSE := 36.0 ## where the first one settles ahead of Mario; each further one stands 24 px further out
+const INVADER_SLOTS := 3
+const INVADER_VANISH := 0.4 ## seconds it blinks out after its attack resolves
+const INVADER_FOLLOW_Y := 140.0 ## px/s it follows a change in the ground level
+const INVADER_HOP := 10.0 ## how high it floats while it crosses a pit
+const MAX_INVADERS := 8 ## three can be ACTIVE; the rest are ones still blinking out
 
 var id := 0
 var course := 0
@@ -58,8 +74,11 @@ var flag_y := -151.0
 var mario_hidden := false
 var ko_overlay := false
 var enemies: Array[Dictionary] = []
+var invaders: Array[BattlePreviewInvader] = [] ## the pictures of this opponent's ACTIVE incoming attacks
 var steps_taken := 0
 
+var _inc_spawn: Array[Dictionary] = [] # INCOMING_ACTIVATED still to show: {tick, seq, kind}
+var _inc_end: Array[Dictionary] = [] # INCOMING_RESOLVED still to show: {tick, seq, cause}
 var _keys: Array[Dictionary] = []
 var _key_cursor := 0
 var _pending: Array[Dictionary] = [] # HIT / KO still to be staged
@@ -120,6 +139,12 @@ func push(tick: int, course_: int, progress: float, power_: int, _alive: bool, e
 					_clear.power_to = e.a
 				else:
 					_loose_power.append({"tick": float(e.tick), "power_to": e.a})
+			BattleSession.EventType.INCOMING_ACTIVATED:
+				if phase != Phase.KO and phase != Phase.DONE:
+					_inc_spawn.append({"tick": float(e.tick), "seq": int(e.a), "kind": int(e.kind)})
+			BattleSession.EventType.INCOMING_RESOLVED:
+				if phase != Phase.KO and phase != Phase.DONE:
+					_inc_end.append({"tick": float(e.tick), "seq": int(e.a), "cause": int(e.cause)})
 
 func _key_progress(k: Dictionary) -> float:
 	return 1.0 if k.course > course else clampf(k.p, 0.0, 1.0)
@@ -167,6 +192,7 @@ func _step() -> void:
 	sim_t += STEP
 	phase_t += STEP
 	steps_taken += 1
+	var running := phase == Phase.RUN and freeze_t <= 0.0 # the classic time stop (Mario growing) holds every enemy
 	match phase:
 		Phase.RUN:
 			_step_run()
@@ -179,6 +205,7 @@ func _step() -> void:
 		Phase.WALK_OUT:
 			_step_walk_out()
 	_update_camera()
+	_tick_invaders(running and phase == Phase.RUN)
 	_fill_frame()
 
 func _step_run() -> void:
@@ -541,6 +568,7 @@ func _end_ko() -> void:
 	phase = Phase.KO
 	mario_hidden = true
 	ko_overlay = true
+	_clear_invaders() # the KO picture stands alone; whatever was still coming is gone with the run
 
 # ---- level clear
 
@@ -551,6 +579,8 @@ func _grab_pole() -> void:
 	x = sketch.goal_x - 7.0
 	pose = "Climb"
 	_slide_done_t = -1.0
+	for inv in invaders:
+		_begin_vanish(inv, BattleAttack.Resolution.NONE) # the level is over; the attacks themselves run on in the session
 
 func _step_flag() -> void:
 	pose = "Climb"
@@ -594,6 +624,102 @@ func _step_walk_out() -> void:
 	walk_phase += STEP * 9.0
 	if x >= sketch.castle_x:
 		mario_hidden = true # steps through the door
+
+# ---- incoming enemies (authoritative attacks, shown)
+
+## Runs every step in every live phase. Spawns the invaders whose INCOMING_ACTIVATED tick the picture
+## has reached, ends the ones whose INCOMING_RESOLVED tick it has reached (spawns first, so an attack
+## that activates and resolves in the same tick still shows for a moment), moves them while the run
+## is moving, and removes the ones that have finished blinking out.
+func _tick_invaders(moving: bool) -> void:
+	if invaders.is_empty() and _inc_spawn.is_empty() and _inc_end.is_empty():
+		return
+	while not _inc_spawn.is_empty() and _inc_spawn[0].tick <= sim_t:
+		var s: Dictionary = _inc_spawn.pop_front()
+		if phase == Phase.RUN or phase == Phase.DYING or phase == Phase.FALLING: # nothing arrives at the flagpole
+			_spawn_invader(s.seq, s.kind)
+	while not _inc_end.is_empty() and _inc_end[0].tick <= sim_t:
+		var r: Dictionary = _inc_end.pop_front()
+		var inv := invader_for(r.seq)
+		if inv != null:
+			_begin_vanish(inv, r.cause)
+	var kept: Array[BattlePreviewInvader] = []
+	for inv in invaders:
+		inv.t += STEP
+		if inv.is_vanishing():
+			inv.vanish_t += STEP
+			if inv.vanish_t >= INVADER_VANISH:
+				continue
+		elif moving:
+			_move_invader(inv)
+		kept.append(inv)
+	invaders = kept
+
+## The picture of attack `seq` on this run, or null.
+func invader_for(seq: int) -> BattlePreviewInvader:
+	for inv in invaders:
+		if inv.seq == seq:
+			return inv
+	return null
+
+func _spawn_invader(seq: int, kind: int) -> void:
+	var preview_kind := BattleEnemyIcon.preview_kind(kind)
+	if preview_kind == "" or invader_for(seq) != null or invaders.size() >= MAX_INVADERS:
+		return
+	var inv := BattlePreviewInvader.new()
+	inv.seq = seq
+	inv.kind = kind
+	inv.preview_kind = preview_kind
+	inv.slot = _free_invader_slot(seq)
+	inv.close = INVADER_CLOSE + 24.0 * inv.slot
+	inv.phase = float(seq % 7) * 0.9
+	inv.ahead = maxf(camera_x + view_w + INVADER_MARGIN - x, inv.close + 24.0)
+	inv.x = minf(x + inv.ahead, sketch.goal_x - 12.0)
+	var g := sketch.ground_y_at(inv.x)
+	if g >= BattleLevelSketch.PIT_Y * 0.5:
+		g = sketch.ground_y_at(x)
+	if g >= BattleLevelSketch.PIT_Y * 0.5:
+		g = 0.0
+	inv.ground_y = g
+	inv.y = g
+	invaders.append(inv)
+
+## The first of the INVADER_SLOTS places ahead of Mario that no live invader holds (several incoming
+## enemies stand at different distances); with every place taken it is chosen by the sequence id.
+func _free_invader_slot(seq: int) -> int:
+	for slot in INVADER_SLOTS:
+		var taken := false
+		for inv in invaders:
+			if inv.slot == slot and not inv.is_vanishing():
+				taken = true
+		if not taken:
+			return slot
+	return seq % INVADER_SLOTS
+
+func _begin_vanish(inv: BattlePreviewInvader, cause: int) -> void:
+	if inv.is_vanishing():
+		return
+	inv.state = BattlePreviewInvader.State.VANISH
+	inv.vanish_t = 0.0
+	inv.cause = cause
+
+## It closes in from the edge of the view, then keeps its distance ahead of Mario with a small
+## back-and-forth, standing on the walk line's ground (floating over a pit). No collision, no stomp.
+func _move_invader(inv: BattlePreviewInvader) -> void:
+	var want := inv.close + 8.0 * sin(inv.t * 2.2 + inv.phase)
+	inv.ahead = move_toward(inv.ahead, want, INVADER_APPROACH * STEP)
+	inv.x = minf(x + inv.ahead, sketch.goal_x - 12.0)
+	var g := sketch.ground_y_at(inv.x)
+	var floor_y := inv.ground_y - INVADER_HOP
+	if g < BattleLevelSketch.PIT_Y * 0.5:
+		inv.ground_y = g
+		floor_y = g
+	inv.y = move_toward(inv.y, floor_y, INVADER_FOLLOW_Y * STEP)
+
+func _clear_invaders() -> void:
+	invaders.clear()
+	_inc_spawn.clear()
+	_inc_end.clear()
 
 # ---- placement helpers
 
@@ -674,8 +800,16 @@ func _fill_frame() -> void:
 	f.fade = fade
 	f.ko_overlay = ko_overlay
 	f.actors.clear()
+	f.invaders.clear()
 	if assets == null:
 		return
+	for inv in invaders:
+		if inv.x < camera_x - 24.0 or inv.x > camera_x + view_w + 24.0:
+			continue
+		var ispr := assets.enemy_frame(inv.preview_kind, inv.t)
+		if ispr != null:
+			f.invaders.append({"seq": inv.seq, "kind": inv.kind, "sprite": ispr, "x": inv.x, "y": inv.y,
+				"vanish": inv.vanish_t / INVADER_VANISH if inv.is_vanishing() else 0.0})
 	for e in enemies:
 		if e.x < camera_x - 20.0 or e.x > camera_x + view_w + 20.0:
 			continue

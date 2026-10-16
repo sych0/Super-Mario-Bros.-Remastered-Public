@@ -209,6 +209,9 @@ func _run() -> void:
 	SESSION = load("res://Scripts/Classes/Battle/BattleSession.gd")
 	SCREEN = load("res://Scripts/Classes/Battle/BattleScreen.gd")
 	ATLAS = load("res://Scripts/Classes/Battle/BattlePreviewAtlas.gd")
+	# These checks measure how a picture is scaled into its pane, so no attack line, target mark or pip
+	# (they are drawn on panes by design, see tests/battle_attack_render_test.gd) may sit on a pane.
+	SESSION.default_attacks_enabled = false
 	out = args.get("out", out)
 	solid_script = GDScript.new()
 	solid_script.source_code = SOLID_SOURCE
@@ -227,6 +230,7 @@ func _run() -> void:
 	await run_resolution(Vector2i(1280, 720), false)
 	await run_resolution(Vector2i(1280, 720), true)
 	G.current_game_mode = G.GameMode.NONE
+	SESSION.default_attacks_enabled = true
 	if added_pack != "":
 		packs.erase(added_pack)
 	if root.size != original_window:

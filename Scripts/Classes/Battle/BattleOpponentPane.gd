@@ -9,12 +9,17 @@ const FRAME_ALIVE := Color(0.95, 0.6, 0.1, 1)
 const FRAME_KO := Color(1, 0.1, 0.1, 1)
 const TEXT_COLOR := Color(1, 1, 1, 1)
 const SHADER_PATH := "res://Scenes/Parts/BattlePreviewDownsample.gdshader"
+const PIP_ACTIVE := Color(1.0, 0.15, 0.08, 1)
+const PIP_QUEUED := Color(1.0, 0.85, 0.3, 1)
+const PIP_EDGE := Color(0, 0, 0, 0.8)
+const MAX_PIPS := 6
 
 static var _shader: Shader = null
 
 var contestant_id := 0
 var ko := false
 var marked := false ## the KO wash + cross is showing
+var incoming := Vector2i.ZERO ## enemies sent at this opponent: x queued, y active (a view of the session's queue, see BattleAttackPresentation)
 var cell: BattlePreviewCell = null
 var region_px := Rect2i() ## this pane's cell in the atlas, in texels
 var picture := TextureRect.new() ## the downsampled atlas region
@@ -76,6 +81,13 @@ func refresh(c: BattleContestant) -> void:
 		_signature = sig
 		overlay.queue_redraw()
 
+## How many enemies are queued (x) and active (y) against this opponent. Drawn as small markers in the
+## pane's corner at display resolution, so they stay readable even when the preview is not live.
+func set_incoming(counts: Vector2i) -> void:
+	if counts != incoming:
+		incoming = counts
+		overlay.queue_redraw()
+
 func _draw_overlay() -> void:
 	if marked:
 		overlay.draw_rect(Rect2(Vector2.ZERO, size), Color(0.55, 0, 0, 0.7))
@@ -86,9 +98,25 @@ func _draw_overlay() -> void:
 		_text("%02d" % contestant_id, Vector2(1, 1), 0.6)
 		if not marked:
 			_text(world_level_text(), Vector2(1, size.y - 6), 0.6)
+	if not marked:
+		_draw_pips()
 
 # The bitmap font draws its glyph box ~15px above the baseline we give it (at scale 1).
 func _text(text: String, top_left: Vector2, text_scale: float) -> void:
 	overlay.draw_set_transform(top_left, 0.0, Vector2(text_scale, text_scale))
 	overlay.draw_string(font, Vector2(0, 15), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 8, TEXT_COLOR)
 	overlay.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+## One marker per enemy sent at this opponent, from the right edge: lit red for an ACTIVE one, an
+## outline for a QUEUED one that has not arrived yet.
+func _draw_pips() -> void:
+	var active := mini(incoming.y, MAX_PIPS)
+	var queued := mini(incoming.x, MAX_PIPS - active)
+	var x := size.x - 5.0
+	for i in active + queued:
+		var r := Rect2(x - i * 4.0, 2.0, 3.0, 3.0)
+		overlay.draw_rect(r.grow(1.0), PIP_EDGE)
+		if i < active:
+			overlay.draw_rect(r, PIP_ACTIVE)
+		else:
+			overlay.draw_rect(r, PIP_QUEUED, false, 1.0)

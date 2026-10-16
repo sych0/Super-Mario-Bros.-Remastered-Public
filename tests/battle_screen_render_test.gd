@@ -14,6 +14,9 @@ extends SceneTree
 const LEVEL_1_1 := "res://Scenes/Levels/SMB1/World1/1-1.tscn"
 const GOOMBA := "res://Scenes/Prefabs/Entities/Enemies/Goomba.tscn"
 
+## Strip A is the incoming-attack strip now (doc 44): its dark bar over the gold, empty in the middle.
+var STRIP_A_BAR := Color(0.26, 0.13, 0.05)
+
 var failures := 0
 var args := {}
 var G
@@ -147,7 +150,7 @@ func _run() -> void:
 			if is_sky(px(img, x, y)):
 				sky_outside += 1
 	check(sky_outside == 0, "no level sky anywhere around the window (%d sampled pixels)" % sky_outside)
-	check(near(px(img, 240, 247), BS.STRIP_A_COLOR) and near(px(img, 240, 259), BS.STRIP_B_COLOR), "the two strips sit under the window")
+	check(near(px(img, 240, 247), STRIP_A_BAR) and near(px(img, 240, 259), BS.STRIP_B_COLOR), "the two strips sit under the window (strip A carries the incoming bar)")
 	# -- HUD over the window -----------------------------------------------------------------------
 	# (the right edge is not checked: without translations the sandbox's long locale key can run past it)
 	var hud_in := 0
@@ -222,7 +225,7 @@ func _run() -> void:
 		check(px(fade, 112, 3).get_luminance() < 0.05 and px(fade, 367, 242).get_luminance() < 0.05, "...up to the window's corners")
 		check(near(px(fade, 1, 135), BS.WALLPAPER) and near(px(fade, 478, 135), BS.WALLPAPER), "...and the Battle wallpaper around it is untouched")
 		check(near(px(fade, 110.5, 135), BS.FRAME_FILL) or near(px(fade, 111, 135), BS.FRAME_FILL), "...as is the frame")
-		check(near(px(fade, 240, 247), BS.STRIP_A_COLOR), "...and the strips under the window")
+		check(near(px(fade, 240, 247), STRIP_A_BAR), "...and the strips under the window")
 		var panes_ok := true
 		for r in scr.layout.slots:
 			if px(fade, r.position.x + 16, r.position.y + 20).get_luminance() < 0.05:

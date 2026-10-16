@@ -13,6 +13,11 @@ extends Control
 ## screen alive. A round ending (death, time out, a win) never leaves this screen: the next
 ## round reloads World 1-1 into the same GameViewport. Only Quit leaves Battle, as an ordinary
 ## transition to the title, which frees this screen and, with it, the game scene.
+##
+## The enemy send / receive loop is made visible here and only here (doc 44): `attack_view` reads the
+## session's attack events into lines (`attack_layer`), markers on the opponent panes, the real player's
+## incoming strip (`incoming_strip`, strip A) and, through the preview driver's tracks, incoming enemies
+## in the opponents' pictures. It never writes to the session; nothing of it reaches the game window.
 
 const TITLE_SCENE := "res://Scenes/Levels/TitleScreen.tscn"
 const FONT_PATH := "res://Resources/ThemedResources/FontMain.tres"
@@ -26,6 +31,7 @@ const BADGE_EDGE := Color(0.4, 0.22, 0.1, 1)
 const BADGE_TEXT := Color(0.25, 0.14, 0.06, 1)
 const OVERLAY_LAYER := 90
 const FREEZE_DELAY_FRAMES := 3 ## frames a fresh level runs before the pre-round freezes it (camera and Mario settle)
+const MAX_PRESENTATION_STEP := 0.1 ## a long frame (a hitch, a stalled window) advances the attack lines by at most this
 
 ## Emitted once a game scene (LevelTransition, a level, ...) has been added to GameViewport.
 signal game_scene_changed(scene: Node)
@@ -45,6 +51,9 @@ var atlas: BattlePreviewAtlas = null ## the one shared render target holding all
 var cells: Array[BattlePreviewCell] = [] ## 187x240 pictures, in the atlas (index = contestant id - 1)
 var panes: Array[BattleOpponentPane] = [] ## 32x41 windows on the canvas, each showing its own atlas region
 var driver: BattlePreviewDriver = null ## drives the live previews (all 34 on World 1-1)
+var attack_view: BattleAttackPresentation = null ## the visible side of this session's attack loop (a reader of its events; null when attacks are off)
+var attack_layer: BattleAttackLayer = null ## the lines and target marks over the canvas
+var incoming_strip: BattleIncomingStrip = null ## the real player's incoming enemies, in strip A
 var debug_view: TextureRect = null ## dev only: opponent #1's atlas cell at native size over the window
 var audio_listener: AudioListener2D = null
 var battle_round := BattleRound.new() ## the round lifecycle; the same object for every round of this Battle
@@ -66,6 +75,7 @@ var _window_owned := false
 var _applied_visuals := -1
 var _freeze_stretch := TextureRect.STRETCH_SCALE
 var _warned_root_camera := false
+var _attack_session: BattleSession = null ## the session the attack presentation was last set up for
 
 # ---- static API used by the rest of the game -------------------------------------------------
 
@@ -274,6 +284,11 @@ func _build(l: Dictionary) -> void:
 	_rect(frame, Rect2(Vector2(2, 2), frame.size - Vector2(4, 4)), FRAME_FILL)
 	_rect(self, l.strip_a, STRIP_A_COLOR).name = "StripA"
 	_rect(self, l.strip_b, STRIP_B_COLOR).name = "StripB"
+	var strip_rect: Rect2 = l.strip_a
+	incoming_strip = BattleIncomingStrip.new(_font)
+	incoming_strip.position = strip_rect.position
+	incoming_strip.size = strip_rect.size
+	add_child(incoming_strip) # the real player's incoming enemies, drawn over strip A
 	_build_game_window(l.game)
 	_build_previews(l)
 	_place(_time_label, l.status_left, 0.75)
@@ -294,6 +309,9 @@ func _build(l: Dictionary) -> void:
 	_total_label.text = "/%d" % BattleSession.CONTESTANT_COUNT
 	for label in [_course_label, _alive_label, _total_label]:
 		label.add_theme_color_override("font_color", BADGE_TEXT)
+	# The attack lines fly over everything on the canvas (the results and banner sit on a higher layer).
+	attack_layer = BattleAttackLayer.new(l)
+	add_child(attack_layer)
 	# Results sit on a high layer so they cover the game window and its HUD.
 	_overlay_layer.name = "Overlays"
 	_overlay_layer.layer = OVERLAY_LAYER
@@ -413,6 +431,9 @@ func _process(delta: float) -> void:
 	if battle_round.state == BattleRound.State.PLAYING and session.finished and session.get_player().alive:
 		round_over(BattleRound.End.WIN)
 	_ensure_driver()
+	_ensure_attack_view()
+	if attack_view != null:
+		attack_view.update(minf(delta, MAX_PRESENTATION_STEP))
 	refresh()
 	if driver != null:
 		for id in driver.update(BattleHandler.presentation_alpha):
@@ -460,6 +481,31 @@ func _ensure_driver() -> void:
 		debug_view.position = game.position + Vector2(floorf((game.size.x - debug_view.size.x) / 2.0), 0)
 		_overlay_layer.add_child(debug_view)
 
+## Makes (once per session) the presentation that turns the session's attack events into lines, markers
+## and the incoming strip. It only reads the session. With the attack loop off there is nothing to show
+## and no presentation exists (Classic never gets here at all: this screen is Battle's).
+func _ensure_attack_view() -> void:
+	if session == null or session == _attack_session:
+		return
+	_attack_session = session
+	_clear_attack_view()
+	if session.attacks.enabled:
+		attack_view = BattleAttackPresentation.new(session)
+		_bind_attack_view()
+
+func _bind_attack_view() -> void:
+	var art: BattlePreviewAssets = driver.assets if driver != null else null
+	attack_layer.bind(attack_view, art)
+	incoming_strip.bind(attack_view, art)
+
+## Everything the attack presentation put on screen goes: lines, marks, pane markers, strip icons.
+func _clear_attack_view() -> void:
+	attack_view = null
+	attack_layer.bind(null, null)
+	incoming_strip.bind(null, null)
+	for pane in panes:
+		pane.set_incoming(Vector2i.ZERO)
+
 ## Re-reads the session into the cells, panes and labels.
 func refresh() -> void:
 	if session == null:
@@ -467,6 +513,14 @@ func refresh() -> void:
 	for i in cells.size():
 		cells[i].refresh(session.contestants[i + 1])
 		panes[i].refresh(session.contestants[i + 1])
+		if attack_view != null:
+			panes[i].set_incoming(attack_view.counts(i + 1))
+	if attack_view != null:
+		var art: BattlePreviewAssets = driver.assets if driver != null else null
+		attack_layer.assets = art
+		incoming_strip.assets = art
+	attack_layer.sync()
+	incoming_strip.sync()
 	var p := session.get_player()
 	var speed := "" if BattleHandler.sim_speed() == 1 else " X%d" % BattleHandler.sim_speed()
 	_time_label.text = "TIME %03d%s" % [maxi(p.time_left, 0), speed]
@@ -535,6 +589,7 @@ func _start_next_round() -> void:
 	for cell in cells:
 		cell.set_live(null, null) # the new session gets its own tracks
 	driver = null
+	_clear_attack_view() # no line, marker or strip icon of the finished round survives
 	BattleHandler.start_match()
 
 ## Builds and shows the result card for `final_session`. `others_alive` is how many opponents
