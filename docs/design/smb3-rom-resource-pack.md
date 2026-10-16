@@ -8,6 +8,79 @@ Scope: use a user-supplied, legitimate *Super Mario Bros. 3* (NES) ROM as an ass
 SMB3 ROM ──► SMB3 decoder/extractor ──► mapping/recipe layer ──► user://…/resource_packs/SMB3Assets ──► existing ResourceSetterNew pipeline
 ```
 
+## 0. Scope: game-wide, not per-mode
+
+**`SMB3Assets` is a game-wide resource pack.** When enabled, it affects every mode and scene that resolves the same resource paths through the global resource-pack system:
+
+- campaign play;
+- Challenge;
+- Boo Race;
+- Marathon / Marathon Practice;
+- Disco;
+- Battle Mode;
+- custom levels, where applicable (§0.2);
+- menus and HUD elements that resolve the same paths;
+- any future mode, automatically.
+
+It is **not** a Battle Mode feature or a feature of any other mode.
+
+**Hard rules**
+
+1. **No mode-specific SMB3 code.**
+   - No `GameMode` checks, no `current_game_mode` reads and no `SMB3` references in mode classes.
+   - That includes `BattleScreen`, `BattlePreview*`, `BattleHandler`, `BooRaceHandler`, `LevelSelect`, `MarathonResults`, Disco, Challenge and custom-level code.
+   - Modes inherit whatever packs are active.
+2. **The only integration point is the global pack list** (`Settings.file.visuals.resource_packs`).
+   - The importer writes a pack folder.
+   - The existing pack menu enables or disables it.
+   - Everything else is existing code.
+3. **SMB3 code lives only in `Scripts/Classes/RomImport/**`, plus its import UI and two constants in `Global`.**
+   - A test enforces this (§9 C4).
+4. **Generated data must not use mode-keyed variations.** No `GameMode:` keys in SMB3 override JSONs.
+   - None of the 249 sprite JSONs in `res://Assets/Sprites` use `GameMode:` keys today, and the SMB3 pack must not introduce them.
+   - The same asset must be chosen regardless of mode.
+
+### 0.1 Why this works with no per-mode code (repo-grounded)
+
+- **Pack precedence is global and mode-independent.**
+  - `ResourceSetterNew.get_resource()` walks `Settings.file.visuals.resource_packs`.
+  - The pack list is persisted in settings and does not depend on `Global.current_game_mode`.
+  - Enabling a pack in `ResourcePackContainer.select()` clears `ResourceSetter`/`ResourceSetterNew`/`ResourceGetter` caches and calls `Global.update_theme()`.
+  - That applies to every subsequently loaded scene, in any mode.
+- **Variation selection depends on level context, not mode.** `get_variation_json()` selects by theme, time, campaign, world/level, room, character, Boo colour and so on.
+  - It *can* read a `GameMode:<name>` key, but no shipped sprite JSON uses one.
+  - So a Challenge or Marathon run of SMB1 1-1 resolves exactly the same `Goomba.json` leaf as campaign 1-1.
+- **All modes play the same level scenes.**
+  - Challenge, Marathon and Marathon Practice reuse the campaign `.tscn` levels (`Scenes/Levels/SMB1/World1/1-1.tscn` …).
+  - Boo Race has its own `Scenes/Levels/SMB1/YouVSBoo/*.tscn` scenes. They are SMB1-campaign levels built from the same prefabs.
+  - All of these levels carry `ResourceSetterNew` nodes, including the terrain `TilesetTextureSetter` in `Scenes/Parts/Tiles.tscn`.
+  - The HUD (`GameHUD`) and menus use the same component.
+- **Custom campaigns compose correctly.**
+  - `CampaignSelect.select()` `push_front`s a custom campaign's own `resource_pack` above the user's packs.
+  - It only removes that same custom pack again, never others.
+  - So a custom campaign pack overrides SMB3, and SMB3 still overrides `BaseAssets`. That is the intended "where applicable" behaviour.
+- **Battle Mode inherits automatically.** Battle Mode lives on the unmerged branch `claude/youthful-tesla-99o9hl`.
+  - **In-round gameplay** sets `GameMode.BATTLE` and `current_campaign = "SMB1"` (`BattleHandler.gd`). It loads normal level scenes, so `ResourceSetterNew` applies the pack.
+  - **Opponent previews** use `BattlePreviewResolver`. That class deliberately re-implements only two rules:
+    - pack precedence, read from the same `Settings.file.visuals.resource_packs` with the same `res://Assets` → `resource_packs/<pack>` mirroring;
+    - the theme/time/campaign/link walk.
+  - So SMB3 PNGs and override JSONs are picked up by previews **without any Battle change**, provided the SMB3 JSON uses only the portable subset in §4.1.1.
+
+### 0.2 What "game-wide" still depends on: campaign filenames, not modes
+
+Coverage varies by **campaign key**, not by mode. Many sheets have per-campaign files:
+
+| Campaign | Example file |
+|---|---|
+| SMB1 | `Overworld.png` |
+| SMBLL | `OverworldLL.png` |
+| SMBANN | `OverworldANN.png`, `DiscoGoomba.png` |
+| SMBS | `…SP.png` |
+
+- **Implication.** If a mode runs SMB1-campaign levels, which includes Battle, custom levels by default and Boo Race, it sees whatever SMB3 covers for SMB1 filenames.
+- **Gaps.** A mode running Lost Levels or ANN levels sees the SMB1 `BaseAssets` look for any LL/ANN/SP filename the SMB3 pack hasn't written.
+- **Fix.** Close these gaps **in the generator**: write the same recipe output under each campaign's filename, or ship a campaign-agnostic override JSON. Never close them in mode code. Full campaign coverage is milestone step 7 (§11).
+
 ---
 
 ## 1. How the current SMB1 importer works (repo-grounded)
@@ -318,7 +391,29 @@ Pack contents, in three tiers:
 2. **PNG + overriding JSON.** Used when frame counts or rects differ: Small Mario walk 2 frames, swim 4, question-block timing. The JSON is **remaster-authored data** (rects and timings) and lives in the repo under `Resources/RomImport/SMB3/overrides/`. It is copied into the pack at generation time. Each overriding JSON must provide every theme and campaign key it wants to cover, or `link` to `default`, because a pack JSON replaces the whole `variations` tree.
 3. **Omitted.** Falls back to SMB1 `BaseAssets`.
 
-**Campaign caveat.** Variations key on campaign: `SMB1`, `SMBLL` (`OverworldLL.png`), `SMBANN`, `SMBS` (`…SP.png`). A drop-in `Overworld.png` only reskins the SMB1 campaign. The first milestone targets the SMB1 campaign only. Later, the generator can also write the `LL`/`SP`/`ANN` filenames from the same recipe if wanted.
+**Campaign caveat.** Variations key on campaign: `SMB1`, `SMBLL` (`OverworldLL.png`), `SMBANN`, `SMBS` (`…SP.png`). A drop-in `Overworld.png` reskins every mode that plays SMB1-campaign levels, but not LL/ANN/SP levels. The first milestone targets SMB1-campaign filenames only. Later, the generator writes the `LL`/`SP`/`ANN` filenames from the same recipe (§0.2). That is campaign coverage, not mode coverage.
+
+#### 4.1.1 Portable JSON subset for SMB3 overrides
+
+Every override JSON the SMB3 pack ships must be resolvable by **every resolver in the game**, not just `ResourceSetterNew`. Today that also means Battle's `BattlePreviewResolver`. It interprets only these keys:
+
+- theme / `default`
+- time
+- campaign (fallback `SMB1`)
+- `link`
+- `source`
+- `rect`
+- `animations`
+- `animation_overrides`
+- the fixed `World1` / `Level1` / `Quest:1` / `RoomType:*` / `GameMode:Campaign` / `Character:*` descent
+
+Rules for SMB3 override JSONs:
+
+- **Allowed keys** are only those above. No `config:`, `flag:`, `choices`, `sequence`, `Metadata:`, `LevelMetadata:` or `GameMode:` keys.
+- **Keep every animation name** that the `res://` original defines. Change frame *counts* and rects, but never remove an animation. For example, Battle previews look up `Idle`, `Move`, `Skid`, `Jump`, `Climb`, `Die` and `Grow` on Mario. Repeat frames where SMB3 has no equivalent.
+- **Keep `source` filenames identical** to the `res://` originals wherever possible. Tier 1 drop-in PNGs then need no JSON override at all, which is the most portable option.
+
+These rules are enforced by schema test A4. They are a constraint on generated **data**, so no resolver or mode needs SMB3 awareness.
 
 ### 4.2 Proposed classes and files
 
@@ -339,7 +434,12 @@ Scripts/Classes/RomImport/SMB3/
                             #   render_sprite(tiles,bank,…)
   SMB3PackGenerator.gd      # orchestrates recipes -> SMB3Assets; progress signals
 Scripts/UI/SMB3PackImport.gd + Scenes/Levels/SMB3PackImport.tscn
-                            # file picker / drop / progress; reachable from the resource-pack menu, not from boot
+                            # file picker / drop / progress; reachable from the global resource-pack menu, not from boot
+                            # and not from any game-mode screen
+
+# Explicitly NOT touched: BattleScreen, BattlePreview*, BattleHandler, BooRaceHandler, LevelSelect,
+# MarathonResults, CampaignSelect, CustomLevelMenu, Player, LevelClass, ResourceSetterNew,
+# BattlePreviewResolver. Modes inherit the pack through Settings.file.visuals.resource_packs.
 
 Resources/RomImport/
   NesMasterPalette.json     # 64 RGB entries (repo-authored or permissively licensed; see §6)
@@ -484,6 +584,10 @@ Decisions that protect that boundary:
 | Mixed look (SMB3 Goomba next to SMB1 Koopa) | Aesthetic only | Expected during rollout. The pack description can say "partial". |
 | `BaseAssets` regenerated (version bump) → SMB3 underlay is stale | Stale cells | Store `base_assets_version` in SMB3 `pack_info`; mark stale and offer regeneration. |
 | Godot `Image` performance in GDScript | Slow generation | Decode each 1 KB bank once into an index buffer and cache; mostly irrelevant at POC scale. |
+| Mode-specific creep: someone "fixes" an SMB3 issue inside Battle or Challenge code | Divergent behaviour per mode | Rule 0.1–0.4, plus static guard test C4. Fix gaps in generated data or generic code only. |
+| Override JSON uses a key that a secondary resolver (`BattlePreviewResolver`) doesn't interpret | Battle previews fall back to placeholders while gameplay shows SMB3 | Portable JSON subset (§4.1.1), schema test A4, and cross-resolver test C3. |
+| Mode-local art caches don't notice a pack toggle (for example `BattlePreviewAssets._cache` on the Battle branch is keyed by scene, theme and campaign, not by pack list) | Stale SMB1 art in that mode until restart | Not SMB3-specific: it affects *any* pack. Fix generically when Battle merges, for example by clearing it from the same place `ResourcePackContainer.select()` clears the other caches, or with a global "packs changed" signal. No SMB3 code. |
+| Campaign filename gaps (LL/ANN/SP) | Some modes and levels look SMB1 | Close in the generator (§0.2), never per mode. |
 | Legal drift (someone commits a generated PNG or silhouette) | Distribution problem | `.gitignore` guard, no mask PNGs, a review checklist item, and a CI grep for `*.nes`. |
 
 ---
@@ -501,6 +605,65 @@ The repo has no unit-test framework today (only a manual `testLevel.tscn`; CI on
 5. **Fallback behaviour.** With a fake pack containing only `Goomba.png`, `get_resource_pack_path` returns the SMB3 path for Goomba and the `BaseAssets` path for Koopa. With an empty or broken override JSON, the existing `ignore_resource_from` logic falls through.
 6. **Master palette:** 64 entries, valid hex.
 
+**C. Game-wide resolution (no ROM needed, CI-safe)**
+
+These tests prove that one generated SMB3 asset is resolved identically in campaign play and in non-campaign modes, with no mode-specific code.
+
+**Fixture.** They run against a **fixture `SMB3Assets` pack**: the output of the synthetic-ROM run from A3, written to a temporary `Global.config_path`.
+
+- Its `Sprites/Enemies/Goomba.png` and terrain `Overworld.png` contain a distinctive synthetic pattern.
+- Its pack list is `["SMB3Assets", "BaseAssets"]`.
+- Expected values are the fixture PNG's SHA-256 and the fixture path. No Nintendo pixels are involved.
+
+**C1. Resolver level, every mode.**
+
+- Set:
+  - theme `Overworld`, time `Day`, campaign `SMB1`;
+  - World 1 / Level 1;
+  - room `MainRoom`;
+  - character Mario.
+- For **each value of `Global.GameMode`**, iterating the enum rather than a hand-written list:
+  - set `Global.current_game_mode`;
+  - clear the `ResourceSetterNew` caches;
+  - resolve `res://Assets/Sprites/Enemies/Goomba.json` and `res://Assets/Sprites/Tilesets/Terrain/TerrainTiles.json` through a detached `ResourceSetterNew` (`mode = SPRITE_FRAMES` / `TEXTURE`).
+- Assert:
+  - `current_resource_pack == "SMB3Assets"`;
+  - the resolved atlas image hashes to the fixture PNG;
+  - the frame rects equal the fixture override, if one exists.
+- Then assert that **all modes produced byte-identical results**.
+- Because it iterates the enum, **Battle (`GameMode.BATTLE`, once merged) and any future mode are covered automatically**. This explicitly includes `CAMPAIGN` and `CHALLENGE`.
+
+**C2. Scene level: campaign vs Challenge.** Load `Scenes/Levels/SMB1/World1/1-1.tscn` headless twice:
+
+1. with `current_game_mode = CAMPAIGN`;
+2. with `current_game_mode = CHALLENGE`, configured the way `LevelSelect` would start a Challenge run.
+
+After one frame, check two things in each run:
+
+- the first Goomba's `AnimatedSprite2D.sprite_frames` frame-0 atlas image;
+- the `Tiles` layer's `TileSetAtlasSource` 0 texture.
+
+Assert that both hash to the fixture images in both runs, and that the runs match each other. This covers the real node path (`ResourceSetterNew` on scene instances, `TilesetTextureSetter`), not just the resolver.
+
+**C3. Battle (activates when Battle Mode is merged).**
+
+- Call `BattlePreviewResolver.resolve("res://Assets/Sprites/Enemies/Goomba.json", "Overworld", "Day", "SMB1")` with the fixture pack list.
+- Assert `source` is the fixture `SMB3Assets/…/Goomba.png` and the rect matches C1.
+- Run the same check over every SMB3 override JSON, to verify the portable subset.
+- Then repeat C2 with `GameMode.BATTLE` using the same 1-1 scene.
+- The test is skipped (with a message) while `BattlePreviewResolver` doesn't exist on the branch. It is test code only, and needs no runtime Battle changes.
+
+**C4. No-mode-code guard (static).**
+
+- Fail if any `.gd` or `.tscn` outside `Scripts/Classes/RomImport/**`, `Scripts/UI/SMB3PackImport.gd`, its scene and the `Global` constants references `SMB3Assets`, `SMB3_PACK_NAME` or `class_name SMB3*`.
+- Also fail if any SMB3 override JSON contains a `GameMode:` key.
+
+**C5. Pack toggle is global.**
+
+- With the fixture pack **disabled** (removed from the list), C1 resolves `BaseAssets`/`res://` for every mode.
+- With it re-enabled via the same code path as `ResourcePackContainer.select()`, every mode resolves `SMB3Assets` again.
+- No mode needs re-initialisation beyond the existing cache clear.
+
 **B. ROM-gated (skipped unless `SMB3_ROM=/path` is set; run locally, never in CI)**
 
 1. **Hash identity:** SHA-1 of `rom[16:]` equals the profile value; CRC32 is `2E6301ED`.
@@ -511,12 +674,19 @@ The repo has no unit-test framework today (only a manual `testLevel.tscn`; CI on
 6. **Frame counts:** small Mario walk resolves to 2 frames, and the overriding `Small.json` declares the same.
 7. **Deterministic output:** generating twice yields byte-identical PNGs; the pack-level SHA-256 manifest (written to `pack_info.json`) is stable.
 8. **No-mapping fallback:** after generation, `FlagPole.png` is absent from `SMB3Assets` and resolves to `BaseAssets`.
+9. **Real-ROM game-wide check:** re-run C1 and C2 against the real generated pack. Expected hashes are the deterministic hashes from B7, so no ROM-derived pixels are committed.
 
 ---
 
 ## 10. Smallest proof-of-concept milestone
 
-> **Given a USA Rev 1 SMB3 ROM, generate `SMB3Assets` containing SMB3 Small Mario, Goomba, ground, brick, question block, pipe, coin and HUD digits, enable it, and load SMB1 World 1-1.**
+> **Given a USA Rev 1 SMB3 ROM, generate `SMB3Assets` containing SMB3 Small Mario, Goomba, ground, brick, question block, pipe, coin and HUD digits. Enable it through the normal resource-pack menu, and load SMB1 World 1-1 in campaign play *and* in Challenge mode. Both must show the same SMB3 assets, with no mode-specific code.**
+
+POC acceptance criteria:
+
+- **Tests:** C1 (all `GameMode` values, including `CAMPAIGN` and `CHALLENGE`), C2 (scene-level campaign vs Challenge), C4 (static guard) and C5 (toggle) pass on the fixture pack. B9 passes locally on a real ROM.
+- **Battle:** if Battle Mode has merged by then, C3 must also pass. A failure there is fixed in generated data, or generically in the shared cache/resolver path, never with SMB3 logic in Battle classes.
+- **Diff scope:** the change touches no file in the "explicitly not touched" list of §4.2.
 
 Scope controls:
 
@@ -559,10 +729,13 @@ Estimate: a focused 1–2 weeks, most of it pinning tile and bank ids.
 4. **Recipe executor and pack writer.**
    - Canvas recipes, underlay, atomic write, `pack_info` manifest.
    - Synthetic-ROM end-to-end test A3, schema tests A4 and A5.
-5. **POC recipes and overrides.** The §10 assets. Hand-verify in World 1-1. Tests B4, B6, B7 and B8.
+5. **POC recipes and overrides.**
+   - The §10 assets.
+   - Hand-verify World 1-1 in campaign **and** Challenge.
+   - Tests B4 and B6–B9, plus the game-wide tests C1, C2, C4 and C5 (and C3 if Battle is merged).
 6. **Entry point.**
    - A CLI flag and debug import scene.
-   - Then the pack-menu "Import SMB3 ROM…" button. That is the only touch to existing UI, and it is additive.
+   - Then the pack-menu "Import SMB3 ROM…" button. That is the only touch to existing UI, and it is additive. It goes in the **global** resource-pack menu, never in a mode's menu.
 7. **Breadth.**
    - Big/Fire/Luigi.
    - Koopa and shells.
@@ -570,6 +743,8 @@ Estimate: a focused 1–2 weeks, most of it pinning tile and bank ids.
    - Remaining Overworld terrain cells.
    - Then other SMB3-native themes (Underground, Fortress, Water, Desert, Ice, Sky, Airship).
    - SMB3-native remaster blocks (note block, muncher, donut, P-switch).
+   - Campaign filename coverage (LL/ANN/SP variants) so LL/ANN-based modes and levels get SMB3 art too (§0.2).
+   - Each new asset is added to the C1 fixture set, so cross-mode resolution stays verified as coverage grows.
 8. **Optional convergence.**
    - If the new modules are stable, consider pointing SMB1's generator at `NesRom`/`NesChr` internally.
    - Only with byte-identical `BaseAssets` output verified before and after.
