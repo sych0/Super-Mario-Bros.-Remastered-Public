@@ -1,11 +1,12 @@
 class_name BattleScreen
 extends Control
-## The Battle screen (doc 38). While Battle is active this is the SceneTree's current scene and
-## owns the root window: a 480x270 canvas with the Battle wallpaper, frame, opponent panes and
-## badges, plus the real player's classic game running unchanged inside a 256x240 SubViewport
-## (`GameViewport`) shown as the centre window. Classic code therefore sees a 256x240 viewport
-## (camera walls, enemy activation, drop shadows...) exactly as in Classic modes; the Battle
-## canvas only surrounds it. A view of the current BattleSession plus the host of the game
+## The Battle screen (doc 38; its look is the SMB35 UI fidelity pass, doc 50). While Battle is active this is the
+## SceneTree's current scene and owns the root window: a 480x270 canvas with the Battle wallpaper, frame, opponent
+## panes and badges, plus the real player's classic game running unchanged inside a 256x240 SubViewport
+## (`GameViewport`) shown as the centre window, cropped on the display to 256x224 (its top and bottom 8 rows are not
+## shown). Classic code therefore sees a 256x240 viewport (camera walls, enemy activation, drop shadows...) exactly as
+## in Classic modes; the Battle canvas only surrounds it. The HUD (coins, item box, targeting selector, timer) is
+## drawn over the window by `hud`; the classic HUD row is hidden while Battle runs. A view of the current BattleSession plus the host of the game
 ## scene and of the round lifecycle (BattleRound): READY, play, results, next round.
 ##
 ## Game scenes never go through change_scene_to_file while Battle runs: Global.transition_to_scene
@@ -21,14 +22,12 @@ extends Control
 
 const TITLE_SCENE := "res://Scenes/Levels/TitleScreen.tscn"
 const FONT_PATH := "res://Resources/ThemedResources/FontMain.tres"
-const WALLPAPER := Color(0.97, 0.70, 0.14, 1) # reference's gold background
-const FRAME_EDGE := Color(0.93, 0.55, 0.08, 1)
-const FRAME_FILL := Color(0.99, 0.82, 0.33, 1)
-const STRIP_A_COLOR := Color(0.98, 0.62, 0.12, 1)
-const STRIP_B_COLOR := Color(0.99, 0.80, 0.30, 1)
-const BADGE_FILL := Color(0.99, 0.97, 0.9, 1)
-const BADGE_EDGE := Color(0.4, 0.22, 0.1, 1)
-const BADGE_TEXT := Color(0.25, 0.14, 0.06, 1)
+## The measured colours of doc 47 B35-LAYOUT-006 (BattleHudLayout owns the numbers).
+const WALLPAPER := BattleHudLayout.WALLPAPER
+const FRAME_LIGHT := BattleHudLayout.FRAME_LIGHT
+const FRAME_DARK := BattleHudLayout.FRAME_DARK
+const OUTLINE := BattleHudLayout.OUTLINE
+const STRIP_B_COLOR := BattleHudLayout.FRAME_LIGHT ## the status strip's gold
 const OVERLAY_LAYER := 90
 const FREEZE_DELAY_FRAMES := 3 ## frames a fresh level runs before the pre-round freezes it (camera and Mario settle)
 const MAX_PRESENTATION_STEP := 0.1 ## a long frame (a hitch, a stalled window) advances the attack lines by at most this
@@ -42,7 +41,9 @@ const PROVISIONAL_MODE_KEYS := {
 	KEY_L: BattleTargeting.Mode.MOST_COINS,
 	KEY_K: BattleTargeting.Mode.ATTACKERS,
 }
-const MODE_NOTE_SECONDS := 2.5 ## how long "NOT AVAILABLE YET" replaces the mode readout
+const LABELS_ENV := "SMB1R_BATTLE_LABELS"
+const LABELS_ARG := "--battle-labels"
+const LABELS_KEY := KEY_F3 ## debug: toggles the contestant numbers, course text and incoming counts
 
 ## Emitted once a game scene (LevelTransition, a level, ...) has been added to GameViewport.
 signal game_scene_changed(scene: Node)
@@ -55,7 +56,8 @@ static var confirm_source := Callable()
 
 var session: BattleSession = null # the session being displayed (kept alive for the result)
 var layout := {}
-var game_container: SubViewportContainer = null ## the centre window on the canvas
+var game_clip: Control = null ## the centre window on the canvas: 256x224, clipping the viewport's rows that are not shown
+var game_container: SubViewportContainer = null ## shows the whole 256x240 viewport, offset up inside `game_clip`
 var game_viewport: SubViewport = null ## the classic 256x240 game
 var game_scene: Node = null ## whatever currently runs inside GameViewport
 var atlas: BattlePreviewAtlas = null ## the one shared render target holding all 34 preview cells
@@ -65,6 +67,11 @@ var driver: BattlePreviewDriver = null ## drives the live previews (all 34 on Wo
 var attack_view: BattleAttackPresentation = null ## the visible side of this session's attack loop (a reader of its events; null when attacks are off)
 var attack_layer: BattleAttackLayer = null ## the lines and target marks over the canvas
 var incoming_strip: BattleIncomingStrip = null ## the real player's incoming enemies, in strip A
+var status_strip: BattleStatusStrip = null ## the eye counter and WATCH OUT!, in strip B
+var hud: BattleHud = null ## coins, item box, timer and selector, inside the window
+var selector: BattleTargetSelector = null ## the four-way targeting selector (hud's child)
+var badge_course: BattleBadge = null
+var badge_alive: BattleBadge = null
 var target_reticle: BattleTargetReticle = null ## the red bracket on the real player's current target pane
 var debug_view: TextureRect = null ## dev only: opponent #1's atlas cell at native size over the window
 var audio_listener: AudioListener2D = null
@@ -73,24 +80,16 @@ var game_frozen := false ## the game window is frozen for the pre-round (or a wi
 var result_text := ""
 var round_others_alive := 0 ## opponents still in when the round ended
 var _font: Font = null
-var _time_label := Label.new()
-var _rank_label := Label.new()
-var _alive_label := Label.new() # alive count in the right badge, over "/35"
-var _course_label := Label.new() # "W-L" in the left badge
-var _total_label := Label.new()
 var _overlay_layer := CanvasLayer.new()
 var _overlay := ColorRect.new()
 var _overlay_label := Label.new()
-var _banner := Label.new() ## "READY" / "GO!" over the window
+var _banner: BattleBanner = null ## HERE WE GO... / READY / 3 / 2 / 1 / GO! over the window
 var _saved_window := {}
 var _window_owned := false
 var _applied_visuals := -1
 var _freeze_stretch := TextureRect.STRETCH_SCALE
 var _warned_root_camera := false
 var _attack_session: BattleSession = null ## the session the attack presentation was last set up for
-var _target_label := Label.new() ## PROVISIONAL readout of the player's targeting mode, in strip B
-var _mode_note := "" ## a short message that replaces the readout (a mode that is not available)
-var _mode_note_until := 0 ## Time.get_ticks_msec() until which it shows
 
 # ---- static API used by the rest of the game -------------------------------------------------
 
@@ -191,6 +190,7 @@ func _capture_window() -> void:
 		"mode": window.content_scale_mode, "stretch": window.content_scale_stretch,
 		"setting_size": _video_setting("size"), "setting_scaling": _video_setting("scaling"),
 		"setting_visuals": _video_setting("visuals"),
+		"snap_controls": window.gui_snap_controls_to_pixels, "snap_transforms": window.snap_2d_transforms_to_pixel,
 	}
 
 ## The 480x270 Battle canvas: scaling setting picks integer / fractional, visuals picks pixel snapping.
@@ -201,7 +201,13 @@ func _apply_canvas() -> void:
 	window.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
 	window.content_scale_stretch = _stretch_for(_video_setting("scaling")) as Window.ContentScaleStretch
 	_applied_visuals = _video_setting("visuals")
-	RenderingServer.viewport_set_snap_2d_transforms_to_pixel(window.get_viewport_rid(), _applied_visuals == 0)
+	# The Battle canvas is laid out in fractions of a logical pixel (doc 47's panes are 32.75 x 41.5, its hairlines 0.5). Godot
+	# rounds every Control, and every canvas item's transform, to whole pixels unless told not to, which would drop the hairlines
+	# and nudge the panes, so the root snaps neither while Battle owns it (exact at 4x, a device pixel's rounding at other
+	# sizes). The game window keeps its own pixel snapping, and the user's settings come back on leaving.
+	window.gui_snap_controls_to_pixels = false
+	window.snap_2d_transforms_to_pixel = false
+	RenderingServer.viewport_set_snap_2d_transforms_to_pixel(window.get_viewport_rid(), false)
 
 ## Hands the window back. If the user changed the size / scaling / visuals settings from the Battle
 ## pause menu, the new values apply by the same rules as WindowChanger and Level.reset_resolution.
@@ -224,6 +230,8 @@ func _restore_window() -> void:
 		window.content_scale_aspect = _saved_window.aspect
 		window.content_scale_mode = _saved_window.mode
 		window.content_scale_stretch = _saved_window.stretch
+	window.gui_snap_controls_to_pixels = bool(_saved_window.get("snap_controls", true))
+	window.snap_2d_transforms_to_pixel = bool(_saved_window.get("snap_transforms", true))
 	RenderingServer.viewport_set_snap_2d_transforms_to_pixel(window.get_viewport_rid(), _video_setting("visuals") == 0)
 
 ## Something (e.g. the pause menu's settings) moved the root away from the Battle canvas.
@@ -239,9 +247,6 @@ func _keep_window() -> void:
 # ---- global UI that lives outside the scene (doc 38, 5.3) --------------------------------------
 
 func _capture_global_ui() -> void:
-	var hud := Global.get_node_or_null("GameHUD") as CanvasLayer
-	if hud != null:
-		hud.offset = Vector2(0, game_rect().position.y) # CENTER_TOP then lands on the window
 	var transition := Global.get_node_or_null("Transition") as CanvasLayer
 	if transition != null:
 		# The fade covers the game window only, not the whole Battle canvas.
@@ -260,9 +265,6 @@ func _release_transition() -> void:
 
 func _release_global_ui() -> void:
 	_release_transition()
-	var hud := Global.get_node_or_null("GameHUD") as CanvasLayer
-	if hud != null:
-		hud.offset = Vector2.ZERO
 
 # ---- scene routing -----------------------------------------------------------------------------
 
@@ -294,45 +296,46 @@ func _arm_pre_round(scene: Node) -> void:
 
 func _build(l: Dictionary) -> void:
 	layout = l
+	if OS.is_debug_build() and (OS.get_environment(LABELS_ENV) == "1" or OS.get_cmdline_user_args().has(LABELS_ARG)):
+		BattleOpponentPane.show_labels = true
 	_rect(self, Rect2(Vector2.ZERO, l.canvas), WALLPAPER).name = "Wallpaper"
-	var frame := _rect(self, l.frame, FRAME_EDGE)
+	# The frame: a lighter band outside a deeper gold one, and the thin dark lines round the window and the two strips.
+	var frame := _rect(self, l.frame, FRAME_LIGHT)
 	frame.name = "Frame"
-	_rect(frame, Rect2(Vector2(2, 2), frame.size - Vector2(4, 4)), FRAME_FILL)
-	_rect(self, l.strip_a, STRIP_A_COLOR).name = "StripA"
-	_rect(self, l.strip_b, STRIP_B_COLOR).name = "StripB"
+	_rect(frame, Rect2(Vector2(2, 2), frame.size - Vector2(4, 4)), FRAME_DARK).name = "FrameInner"
+	var window_edge := _rect(self, (l.game as Rect2).grow(BattleHudLayout.OUTLINE_WIDTH), OUTLINE)
+	window_edge.name = "WindowOutline"
+	var strip_a_edge := _rect(self, (l.strip_a as Rect2).grow(BattleHudLayout.OUTLINE_WIDTH), OUTLINE)
+	strip_a_edge.name = "StripA"
+	var strip_b_edge := _rect(self, (l.strip_b as Rect2).grow(BattleHudLayout.OUTLINE_WIDTH), OUTLINE)
+	strip_b_edge.name = "StripB"
+	_rect(self, l.strip_b, STRIP_B_COLOR).name = "StripBFill"
 	var strip_rect: Rect2 = l.strip_a
 	incoming_strip = BattleIncomingStrip.new(_font)
 	incoming_strip.position = strip_rect.position
 	incoming_strip.size = strip_rect.size
 	add_child(incoming_strip) # the real player's incoming enemies, drawn over strip A
+	var status_rect: Rect2 = l.strip_b
+	status_strip = BattleStatusStrip.new(_font)
+	status_strip.position = status_rect.position
+	status_strip.size = status_rect.size
+	add_child(status_strip)
 	_build_game_window(l.game)
+	hud = BattleHud.new(l, _font) # over the game window: coins, item box, timer, selector
+	selector = hud.selector
+	add_child(hud)
 	_build_previews(l)
-	_place(_time_label, l.status_left, 0.75)
-	_place(_rank_label, l.status_right, 0.75)
-	_time_label.add_theme_color_override("font_color", BADGE_TEXT)
-	_rank_label.add_theme_color_override("font_color", BADGE_TEXT)
-	var badge_l: Rect2 = l.badge_left
-	var badge_r: Rect2 = l.badge_right
-	_add_badge(badge_l, "BadgeCourse")
-	_add_badge(badge_r, "BadgeAlive")
-	# Course "W-L" sits low in the left badge (the reference's "COURSE" caption does not fit 32 px).
-	_place(_course_label, Rect2(badge_l.position + Vector2(2, badge_l.size.y - 14), Vector2(badge_l.size.x, 12)), 0.85)
-	# Small Mario head icon above the alive count.
-	_rect(self, Rect2(badge_r.position + Vector2(badge_r.size.x / 2.0 - 4, 3), Vector2(8, 8)), Color(0.85, 0.15, 0.1))
-	# Alive count over a fixed "/35" (the reference's "35/35", stacked to fit the narrow badge).
-	_place(_alive_label, Rect2(badge_r.position + Vector2(2, badge_r.size.y - 27), Vector2(badge_r.size.x, 12)), 0.85)
-	_place(_total_label, Rect2(badge_r.position + Vector2(2, badge_r.size.y - 14), Vector2(badge_r.size.x, 12)), 0.85)
-	_total_label.text = "/%d" % BattleSession.CONTESTANT_COUNT
-	for label in [_course_label, _alive_label, _total_label]:
-		label.add_theme_color_override("font_color", BADGE_TEXT)
+	badge_course = BattleBadge.new(BattleBadge.Kind.COURSE, _font)
+	badge_alive = BattleBadge.new(BattleBadge.Kind.ALIVE, _font)
+	for pair in [[badge_course, l.badge_left], [badge_alive, l.badge_right]]:
+		var badge: BattleBadge = pair[0]
+		var r: Rect2 = pair[1]
+		badge.position = r.position
+		badge.size = r.size
+		add_child(badge)
 	# The target reticle sits over the panes and under the attack lines.
 	target_reticle = BattleTargetReticle.new(l)
 	add_child(target_reticle)
-	# PROVISIONAL readout of the targeting mode and its keys, in strip B (plain gold until coins and items).
-	_place(_target_label, l.strip_b, 0.6)
-	_target_label.add_theme_color_override("font_color", BADGE_TEXT)
-	_target_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_target_label.name = "TargetModeReadout"
 	# The attack lines fly over everything on the canvas (the results and banner sit on a higher layer).
 	attack_layer = BattleAttackLayer.new(l)
 	add_child(attack_layer)
@@ -347,32 +350,32 @@ func _build(l: Dictionary) -> void:
 	_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_overlay.visible = false
 	_overlay_layer.add_child(_overlay)
-	_overlay_label.position = Vector2(24, 40)
+	_overlay_label.position = Vector2(24, 36)
 	_overlay_label.size = Vector2(game.size.x - 48, 160)
 	_overlay_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_style(_overlay_label)
 	_overlay.add_child(_overlay_label)
-	# READY / GO! sits in the middle of the game window.
-	_banner.name = "Banner"
-	_banner.position = game.position + Vector2(0, game.size.y / 2.0 - 16.0)
-	_banner.size = Vector2(game.size.x / 2.0, 16.0)
-	_banner.scale = Vector2(2, 2)
-	_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_banner.visible = false
-	_style(_banner)
-	_banner.add_theme_color_override("font_color", Color.WHITE)
-	_banner.add_theme_color_override("font_shadow_color", Color.BLACK)
-	_banner.add_theme_constant_override("shadow_offset_x", 1)
-	_banner.add_theme_constant_override("shadow_offset_y", 1)
+	# HERE WE GO... / READY / 3 / 2 / 1 / GO! sit in the middle of the game window.
+	_banner = BattleBanner.new(_font)
+	_banner.position = game.position
+	_banner.size = game.size
 	_overlay_layer.add_child(_banner)
 
-## The classic game: a 256x240 SubViewport shown 1:1 (logical) with nearest filtering. Nothing
-## in here ever sees the canvas size, so classic camera / physics / enemy code is unchanged.
+## The classic game: a 256x240 SubViewport shown 1:1 (logical) with nearest filtering, through a 256x224 window that
+## crops its top and bottom 8 rows on the DISPLAY only (doc 47 B35-LAYOUT-001). Nothing in here ever sees the canvas size
+## or the crop, so classic camera / physics / enemy code is unchanged.
 func _build_game_window(game: Rect2) -> void:
+	game_clip = Control.new()
+	game_clip.name = "GameWindow"
+	game_clip.position = game.position
+	game_clip.size = game.size
+	game_clip.clip_contents = true
+	game_clip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(game_clip)
 	game_container = SubViewportContainer.new()
-	game_container.name = "GameWindow"
-	game_container.position = game.position
-	game_container.size = game.size
+	game_container.name = "GameView"
+	game_container.position = -(layout.game_crop as Vector2) # the hidden top rows sit above the window
+	game_container.size = BattleHudLayout.GAME_SIZE
 	game_container.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	game_viewport = SubViewport.new()
 	game_viewport.name = "GameViewport"
@@ -381,7 +384,7 @@ func _build_game_window(game: Rect2) -> void:
 	game_viewport.snap_2d_transforms_to_pixel = true # the game window is always pixel-perfect
 	game_viewport.process_mode = Node.PROCESS_MODE_PAUSABLE # this screen is ALWAYS; the game still pauses
 	game_container.add_child(game_viewport)
-	add_child(game_container)
+	game_clip.add_child(game_container)
 	# The root's own 2D sounds (AudioManager's players live in the root world, at level
 	# coordinates) are heard from the game camera, not from the middle of the canvas.
 	audio_listener = AudioListener2D.new()
@@ -418,18 +421,6 @@ func _rect(parent: Node, r: Rect2, color: Color) -> ColorRect:
 	parent.add_child(node)
 	return node
 
-func _add_badge(r: Rect2, badge_name: String) -> void:
-	var edge := _rect(self, r, BADGE_EDGE)
-	edge.name = badge_name
-	_rect(edge, Rect2(Vector2(1, 1), r.size - Vector2(2, 2)), BADGE_FILL)
-
-func _place(label: Label, rect: Rect2, text_scale: float) -> void:
-	label.position = rect.position
-	label.size = rect.size / text_scale
-	label.scale = Vector2(text_scale, text_scale)
-	_style(label)
-	add_child(label)
-
 func _style(label: Label) -> void:
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if _font != null:
@@ -447,7 +438,7 @@ func _process(delta: float) -> void:
 	battle_round.paused = Global.game_paused # the pause menu holds the pre-round and the results
 	battle_round.update(delta, _confirm_pressed() if battle_round.state == BattleRound.State.RESULTS else false)
 	_banner.text = battle_round.banner_text()
-	_banner.visible = _banner.text != ""
+	_advance_ui(0.0 if (get_tree().paused or Global.game_paused) else delta)
 	if BattleSession.current == null:
 		return # between Quit and the scene change to the title
 	session = BattleSession.current
@@ -528,7 +519,6 @@ func _bind_attack_view() -> void:
 func _clear_attack_view() -> void:
 	attack_view = null
 	target_reticle.set_target(0)
-	_target_label.text = ""
 	attack_layer.bind(null, null)
 	incoming_strip.bind(null, null)
 	for pane in panes:
@@ -550,13 +540,38 @@ func refresh() -> void:
 	attack_layer.sync()
 	incoming_strip.sync()
 	target_reticle.set_target(_reticle_target())
-	_refresh_target_readout()
+	_refresh_hud()
+
+## What the window's HUD, the badges and the status strip show, from the session (and the classic game's own coin count
+## and power state). Written only when it changes.
+func _refresh_hud() -> void:
 	var p := session.get_player()
-	var speed := "" if BattleHandler.sim_speed() == 1 else " X%d" % BattleHandler.sim_speed()
-	_time_label.text = "TIME %03d%s" % [maxi(p.time_left, 0), speed]
-	_rank_label.text = "RANK %d/%d" % [session.get_provisional_rank(), BattleSession.CONTESTANT_COUNT]
-	_alive_label.text = "%d" % session.alive_count
-	_course_label.text = "%d-%d" % [session.world, session.level]
+	var art: BattlePreviewAssets = driver.assets if driver != null else null
+	hud.set_values(Global.coins, p.time_left, BattleHandler.sim_speed())
+	var with_attacks := attack_view != null
+	selector.visible = with_attacks # without the attack loop there is nothing to aim
+	if with_attacks:
+		selector.set_mode(session.player_target_mode)
+		selector.set_available(BattleTargeting.Mode.MOST_COINS, session.target_mode_available(BattleTargeting.Mode.MOST_COINS))
+	badge_alive.set_assets(art)
+	badge_alive.set_value("%d/%d" % [session.alive_count, BattleSession.CONTESTANT_COUNT])
+	badge_course.set_value("%d-%d" % [session.world, session.level])
+	incoming_strip.set_power(clampi(int(Global.player_power_states[0]), 0, 2))
+	incoming_strip.show_legend = BattleOpponentPane.show_labels
+	status_strip.set_eye(session.attackers_of(BattleSession.PLAYER_ID).size() if with_attacks else -1)
+	status_strip.set_watch_out(with_attacks and attack_view.watch_out())
+
+## Advances the animations that belong to the screen's own clock (not the Battle clock): the selector's fade, the
+## reticle's punch, the KO cards, WATCH OUT!'s pop and the banner's. Zero while the game is paused, so a pause holds them.
+func _advance_ui(delta: float) -> void:
+	if delta <= 0.0:
+		return
+	selector.advance(delta)
+	target_reticle.advance(delta)
+	status_strip.advance(delta)
+	_banner.advance(delta)
+	for pane in panes:
+		pane.advance(delta)
 
 # ---- round lifecycle (doc 38, section 7) -----------------------------------------------------------
 
@@ -577,22 +592,10 @@ func _reticle_target() -> int:
 		return 0
 	return t
 
-## PROVISIONAL: the current mode and its keys, in strip B. A note (a mode that is not available) replaces it
-## for a moment. Written only when the text changes.
-func _refresh_target_readout() -> void:
-	var text := ""
-	if attack_view != null and session != null:
-		if _mode_note != "" and Time.get_ticks_msec() < _mode_note_until:
-			text = _mode_note
-		else:
-			_mode_note = ""
-			text = "TARGET: %s   [I J K L: MODE, PROVISIONAL]" % BattleTargeting.mode_name(session.player_target_mode).replace("_", " ")
-	if text != _target_label.text:
-		_target_label.text = text
-
 ## Selects the real player's targeting mode (BattleTargeting.Mode). Only while the round is set up or being
-## played and the game is not paused. Returns whether the session accepted it; a mode that is not available
-## (Most Coins, until coin data exists) leaves the mode alone and says so in the readout.
+## played and the game is not paused. Returns whether the session accepted it. The selector answers at once: a
+## chosen mode swells and lights the cross (and the reticle punches on its pane); a mode that is not available (Most
+## Coins, until coin data exists) leaves the mode alone, and its pill shakes and flashes red instead.
 func select_target_mode(mode: int) -> bool:
 	var session_now := BattleSession.current
 	if session_now == null or get_tree().paused or Global.game_paused:
@@ -601,16 +604,20 @@ func select_target_mode(mode: int) -> bool:
 	if state != BattleRound.State.PRE_ROUND and state != BattleRound.State.PLAYING:
 		return false
 	if session_now.set_player_target_mode(mode):
-		_mode_note = ""
+		selector.set_mode(mode, true)
+		target_reticle.pulse()
 		return true
 	if not session_now.target_mode_available(mode):
-		_mode_note = "%s: NOT AVAILABLE YET" % BattleTargeting.mode_name(mode).replace("_", " ")
-		_mode_note_until = Time.get_ticks_msec() + int(MODE_NOTE_SECONDS * 1000.0)
+		selector.refuse(mode)
 	return false
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo and PROVISIONAL_MODE_KEYS.has((event as InputEventKey).physical_keycode):
-		select_target_mode(PROVISIONAL_MODE_KEYS[(event as InputEventKey).physical_keycode])
+	if event is InputEventKey and event.pressed and not event.echo:
+		var key := (event as InputEventKey).physical_keycode
+		if PROVISIONAL_MODE_KEYS.has(key):
+			select_target_mode(PROVISIONAL_MODE_KEYS[key])
+		elif key == LABELS_KEY and OS.is_debug_build():
+			BattleOpponentPane.show_labels = not BattleOpponentPane.show_labels
 
 ## Whether the attack presentation clock is held: exactly when the Battle clock is (the tree is paused
 ## or the game window is frozen), since BattleHandler, which drives that clock, is pausable inside it.
@@ -632,6 +639,8 @@ func _on_round_state_changed(from: int, to: int) -> void:
 	match to:
 		BattleRound.State.PRE_ROUND:
 			_set_game_frozen(true)
+			if is_instance_valid(selector) and BattleSession.current != null:
+				selector.set_mode(BattleSession.current.player_target_mode, true) # the cross shows itself as the round is set up
 		BattleRound.State.PLAYING:
 			_set_game_frozen(false)
 		BattleRound.State.ROUND_OVER:

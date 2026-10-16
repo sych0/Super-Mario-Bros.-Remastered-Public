@@ -245,14 +245,19 @@ func red_corners(img: Image, layout: Dictionary, id: int) -> int:
 func test_target_reticle(layout: Dictionary) -> void:
 	print("-- the target reticle")
 	var t: int = session.target_of(0)
-	await frames(4)
+	await frames(24) # (the reticle punches for 0.3 s when it lands: the corner samples are of the settled bracket)
 	var img := await grab("target_00_reticle")
 	check(t >= 1 and red_corners(img, layout, t) == 4, "the player's target pane (#%d) has a red bracket at all four corners" % t)
 	var others_red := 0
 	for id in range(1, 35):
 		if id != t:
 			others_red += red_corners(img, layout, id)
-	check(others_red == 0, "no other pane has one")
+	check(others_red <= 12, "no other pane has a whole one (a neighbour's near corners can sit in the shared gap: %d arms)" % others_red)
+	var others_full := 0
+	for id in range(1, 35):
+		if id != t and red_corners(img, layout, id) == 4:
+			others_full += 1
+	check(others_full == 0, "no other pane has all four")
 	var rect: Rect2 = layout.slots[t - 1]
 	check(not is_reticle_red(px(img, rect.position.x + 1.5, rect.position.y + 1.5)), "the bracket is outside the pane, in the gap: the picture is not covered")
 	# it follows the player's mode (the times are equal, so one lower time decides)
@@ -260,9 +265,9 @@ func test_target_reticle(layout: Dictionary) -> void:
 	var low := alive_between(18, 34, 3)
 	session.contestants[low].time_left = equal_time - 40
 	check(screen.select_target_mode(1) and session.target_of(0) == low, "(Lowest Time selected: #%d)" % low)
-	await frames(4)
+	await frames(24)
 	var img2 := await grab("target_01_lowest_time")
-	check(red_corners(img2, layout, low) == 4 and (low == t or red_corners(img2, layout, t) == 0), "in Lowest Time the bracket moves to the lowest-time pane (#%d) and leaves the old one" % low)
+	check(red_corners(img2, layout, low) == 4 and (low == t or red_corners(img2, layout, t) < 4), "in Lowest Time the bracket moves to the lowest-time pane (#%d) and leaves the old one" % low)
 	session.contestants[low].time_left = equal_time
 	check(screen.select_target_mode(0) and session.player_target_mode == 0, "(Random selected again, times restored)")
 	await frames(3)
@@ -273,21 +278,21 @@ func test_target_reticle_ko(layout: Dictionary) -> void:
 	session.attacks.targeting = load("res://Scripts/Classes/Battle/BattleTargetingModes.gd").new() # the stock router (earlier sections installed test policies)
 	session.attacks.bots_send = false
 	screen.attack_view.clear_flights()
-	await frames(6)
+	await frames(30)
 	var victim: int = session.target_of(0)
 	var img := await grab("target_02_before_ko")
 	check(victim >= 1 and red_corners(img, layout, victim) == 4, "the bracket is on the target (#%d)" % victim)
 	session.report_ko(victim, session.KoCause.HAZARD)
 	var next: int = session.target_of(0)
 	advance(1)
-	await frames(4)
+	await frames(24)
 	var img3 := await grab("target_03_after_ko")
-	check(next != victim and next >= 1 and red_corners(img3, layout, next) == 4 and red_corners(img3, layout, victim) == 0, "when its pane is KO'd the bracket moves to #%d and none is left on the KO'd one" % next)
+	check(next != victim and next >= 1 and red_corners(img3, layout, next) == 4 and red_corners(img3, layout, victim) < 4, "when its pane is KO'd the bracket moves to #%d and no whole one is left on the KO'd one" % next)
 	var shown := 0
 	for id in range(1, 35):
-		if red_corners(img3, layout, id) > 0:
+		if red_corners(img3, layout, id) == 4:
 			shown += 1
-	check(shown == 1, "exactly one pane has a bracket")
+	check(shown == 1, "exactly one pane has a whole bracket")
 
 func test_player_send(layout: Dictionary, game: Rect2) -> void:
 	print("-- the real player's send")
@@ -410,6 +415,14 @@ func test_incoming_in_preview(layout: Dictionary) -> void:
 	check(track.invaders.is_empty() and screen.panes[target - 1].incoming == Vector2i.ZERO, "when the session resolves them the preview and the pane are clear")
 	check(halo_pixels(img3, pane) <= halo_before + 60, "and the halos are gone from the picture")
 
+## The colour of the `k`-th icon's tile on the incoming bar (send order; BattleIncomingStrip.place_all), `dx` from its centre and `dy`
+## below the bar's top: by default just inside the tile's top-left, left of the enemy's little picture.
+func tile(img: Image, k: int, dx := -3.4, dy := 2.4) -> Color:
+	var bar = screen.incoming_strip
+	var xs: PackedFloat32Array = bar.place_all(bar.items, bar.size.x)
+	var r: Rect2 = screen.layout.strip_a
+	return px(img, floorf(r.position.x + xs[k] + dx), floorf(r.position.y + dy))
+
 func test_player_incoming(layout: Dictionary, game: Rect2) -> void:
 	print("-- attacks aimed at the real player")
 	await wait_lines_gone()
@@ -434,17 +447,17 @@ func test_player_incoming(layout: Dictionary, game: Rect2) -> void:
 	var hollow := 0
 	var hollow_colors := []
 	for i in 4:
-		var c := px(img, strip.position.x + 46.0 + 11.0 * i + 1.0, strip.position.y + 2.0)
+		var c := tile(img, i)
 		hollow_colors.append(c.to_html(false))
-		if c.get_luminance() < 0.2:
+		if diff(c, screen.incoming_strip.ZONE_DARK) < 0.1: # nothing filled in: the bar's own colour
 			hollow += 1
-	check(hollow >= 3, "four attacks whose lines are still in the air are four hollow (in transit) icons in the incoming strip (%d hollow: %s)" % [hollow, hollow_colors])
+	check(hollow >= 3 and screen.incoming_strip.items.all(func(it): return it.in_transit), "four attacks whose lines are still in the air are four hollow (in transit) icons at the right end of the incoming bar (%d hollow: %s)" % [hollow, hollow_colors])
 	await wait_lines_gone()
 	await frames(40) # the 'new' outlines have faded too
 	var landed := await grab("attack_05_incoming_on_player_strip_queued")
 	var dim := 0
 	for i in 4:
-		var c := px(landed, strip.position.x + 46.0 + 11.0 * i + 1.0, strip.position.y + 2.0)
+		var c := tile(landed, i)
 		if c.r < 0.7 and c.r > 0.3 and c.g < 0.4 and c.b < 0.3:
 			dim += 1
 	check(dim >= 3, "once the lines have landed they are four dim (QUEUED) icons in the incoming strip (%d dim)" % dim)
@@ -455,7 +468,7 @@ func test_player_incoming(layout: Dictionary, game: Rect2) -> void:
 	check(screen.incoming_strip.counts == Vector2i(1, 3), "the strip counts 1 queued / 3 active")
 	var whitened := 0
 	for i in 3:
-		var c := px(flash, strip.position.x + 46.0 + 11.0 * i, strip.position.y + 5.5)
+		var c := tile(flash, i, -3.0, 2.4) # (the icons are still on their way: a pixel or two of margin from the tile's edge)
 		if c.r > 0.9 and c.g > 0.32:
 			whitened += 1
 	check(whitened >= 2, "the icons that just became ACTIVE flash (%d of 3 whitened)" % whitened)
@@ -465,23 +478,18 @@ func test_player_incoming(layout: Dictionary, game: Rect2) -> void:
 	var lit_icons := 0 # (nothing spawns in this test, so an ACTIVE attack is ARRIVING: amber; in the level it would be red)
 	var lit_colors := []
 	for i in 3:
-		var c := px(settled, strip.position.x + 46.0 + 11.0 * i + 1.0, strip.position.y + 2.0)
+		var c := tile(settled, i)
 		lit_colors.append(c.to_html(false))
 		if c.r > 0.7 and c.g > 0.35 and c.g < 0.65 and c.b < 0.25:
 			lit_icons += 1
-	var dim_icon := px(settled, strip.position.x + 46.0 + 11.0 * 3, strip.position.y + 5.5)
-	var empty := px(settled, strip.position.x + 46.0 + 11.0 * 5 + 3.0, strip.position.y + 5.5)
-	var bar: Color = BS.STRIP_A_COLOR.lerp(Color(0.2, 0.09, 0.04), 0.92) # the strip's dark bar over its gold
+	var dim_icon := tile(settled, 3, -3.4, 5.5)
+	var after_icons: Vector2 = Vector2(strip.position.x + screen.incoming_strip.gold_end(strip.size.x) + 8.0 + 10.0 * 6.0, strip.position.y + 5.5) # past the last waiting slot
+	var empty := px(settled, after_icons.x, after_icons.y)
+	var bar: Color = screen.incoming_strip.ZONE_ORANGE # the bar's middle zone, where the icons wait
 	check(lit_icons == 3, "three lit (ACTIVE, arriving: amber) icons once the flash has died down (%s)" % [lit_colors])
 	check(dim_icon.r < 0.7 and dim_icon.r > 0.3 and dim_icon.g < 0.4, "and a dim one for the attack that is still queued (%s)" % dim_icon.to_html(false))
 	check(diff(empty, bar) < 0.05, "and nothing after them (%s)" % empty.to_html(false))
-	var text_px := 0
-	var text_left := int((strip.end.x - 120.0) * shot_scale) # the per-phase counts (M6b) are coloured, and wider than the old two-number text
-	for y in range(int(strip.position.y * shot_scale), int(strip.end.y * shot_scale)):
-		for x in range(text_left, int(strip.end.x * shot_scale)):
-			if settled.get_pixel(x, y).get_luminance() > 0.55:
-				text_px += 1
-	check(text_px > 150, "the counts are written on the right of the strip (%d bright pixels)" % text_px)
+	check(not screen.incoming_strip.show_legend, "the bar carries no text or counts (the debug legend is off)")
 	var ground := px(settled, game.position.x + 100.0, game.end.y - 20.0)
 	check(diff(ground, px(base, game.position.x + 100.0, game.end.y - 20.0)) < 0.05, "the game window itself shows nothing of them: its ground is as before")
 	var spawned := 0

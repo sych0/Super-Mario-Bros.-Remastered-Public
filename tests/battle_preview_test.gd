@@ -472,7 +472,7 @@ func test_hud_integration() -> void:
 	# authoritative HUD state is never delayed by the preview lag
 	s.report_ko(1, S.KoCause.HAZARD)
 	await frames(2)
-	check(hud.panes[0].ko and hud._alive_label.text.contains("34"), "a KO shows in the HUD state at once while the picture is still running")
+	check(hud.panes[0].ko and hud.badge_alive.value == "34/35", "a KO shows in the HUD state at once while the picture is still running")
 	check(hud.cells[0].is_live() and not hud.cells[0].frame.ko_overlay and not hud.panes[0].marked, "...and the picture's own KO marking waits for the death animation")
 	root.remove_child(hud)
 	hud.free()

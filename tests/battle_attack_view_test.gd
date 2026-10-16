@@ -163,9 +163,12 @@ func test_geometry() -> void:
 	for id in range(1, 35):
 		var from: Vector2 = GEO.launch_point(layout, id, 0)
 		var to: Vector2 = GEO.landing_point(layout, id, 0)
-		if not (layout.slots[id - 1] as Rect2).has_point(from) or not game.has_point(to):
+		var bar: Rect2 = layout.strip_a
+		if not (layout.slots[id - 1] as Rect2).has_point(from) or not bar.grow(-GEO.BAR_INSET + 0.01).has_point(to) or game.intersects(Rect2(to, Vector2(0.01, 0.01))):
 			enters = false
-	check(enters, "a line to the player starts inside the sender's pane and lands inside the game window")
+		if (to.x < bar.get_center().x) != (GEO.center_of(layout, id).x < bar.get_center().x):
+			enters = false
+	check(enters, "a line to the player starts inside the sender's pane and ends inside the incoming bar, at its end on the sender's side (all 34)")
 	var bb: Vector2 = GEO.launch_point(layout, 3, 20)
 	check((layout.slots[2] as Rect2).has_point(bb) and (layout.slots[19] as Rect2).has_point(GEO.landing_point(layout, 3, 20)),
 		"a bot-to-bot line runs from the sender's pane (#3) to the target's pane (#20)")
@@ -229,8 +232,8 @@ func test_flights_from_sends() -> void:
 	pres2.update(0.0)
 	var h = pres2.flights[0]
 	check(h.seq == c.seq and h.sender == 4 and h.target == 0, "an attack on the real player is a flight from the sender's pane to the player")
-	check((layout.game as Rect2).has_point(GEO.landing_point(layout, h.sender, h.target)) and pres2.counts(0) == Vector2i(1, 0),
-		"it lands in the game window, and the player's queued count is 1")
+	check((layout.strip_a as Rect2).has_point(GEO.landing_point(layout, h.sender, h.target)) and pres2.counts(0) == Vector2i(1, 0),
+		"it ends in the incoming bar, and the player's queued count is 1")
 	check(pres2.marked_ids() == [0], "the real player is the marked target")
 	# nothing to send, nothing to show
 	var s3 = make_session(7, 0)

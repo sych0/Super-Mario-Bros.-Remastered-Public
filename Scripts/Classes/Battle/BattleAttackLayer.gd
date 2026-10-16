@@ -90,7 +90,7 @@ func _draw_flight(f: BattleAttackFlight, clock: float) -> void:
 		icon = 0.95
 	elif f.target == BattleSession.PLAYER_ID:
 		color = TO_PLAYER
-		width = 1.6
+		width = 1.0 # the reference's attacker line is thin and solid (about 1 unit)
 		icon = 0.8
 	else:
 		through_window = true

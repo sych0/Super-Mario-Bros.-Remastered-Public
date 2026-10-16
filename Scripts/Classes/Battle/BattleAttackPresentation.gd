@@ -33,6 +33,7 @@ const RECEIVE_FLASH := 0.45 ## seconds a new arrival keeps the strip lit (from t
 const SPAWN_FLASH := 0.6 ## seconds the strip marks that an attack's enemy just appeared in the level
 const RESOLVE_FADE := 0.5 ## seconds a just-resolved attack's icon lingers in the strip, fading
 const MAX_RESOLVED_KEPT := 6 ## a safety valve for the fading icons (a round never has this many at once)
+const WATCH_OUT_HOLD := 1.0 ## seconds the WATCH OUT! pill stays after a bot's line to the real player has landed (doc 47 B35-INCOMING-005)
 
 ## How an attack on the real player is shown. Derived from the authoritative state (`phase_of`).
 enum Phase {QUEUED, ARRIVING, IN_LEVEL, RESOLVED}
@@ -58,6 +59,7 @@ var _last_activated := -1.0e9
 var _last_activated_seq := -1
 var _resolved_recent: Array[Dictionary] = [] ## the real player's attacks that just ended, for the strip's fade
 var _animate_until := 0.0 ## presentation clock until which something timed (a flash, a fade) is still running
+var _alert_until := -1.0e9 ## presentation clock until which WATCH OUT! shows: a bot's send at the real player, in the air or just landed
 var _targets := PackedInt32Array() ## every contestant's current target as presented: the session's initial targets, moved by TARGET_CHANGED
 
 ## A presentation of `session`'s attacks. Attacks that already happened (a presentation created
@@ -136,6 +138,8 @@ func _on_sent(seq: int, sender: int, target: int, kind: int, tick: int, silent: 
 		return
 	if target == BattleSession.PLAYER_ID:
 		_animate_for(BattleAttackFlight.DURATION + RECEIVE_FLASH) # the line, then the strip's "new" outline
+		if sender != BattleSession.PLAYER_ID:
+			_alert_until = maxf(_alert_until, clock + BattleAttackFlight.DURATION + WATCH_OUT_HOLD)
 	var flight := BattleAttackFlight.new()
 	flight.seq = seq
 	flight.sender = sender
@@ -250,7 +254,8 @@ static func phase_name(phase: int) -> String:
 ## The real player's unresolved incoming attacks, in send order, as copies: {seq, sender, kind, state,
 ## spawned (its real enemy is in the level), phase (Phase: QUEUED / ARRIVING / IN_LEVEL), in_transit (its line
 ## has not landed yet), flash (1..0 after it became ACTIVE), fresh (1..0 after its line landed), arrive
-## (1..0 after its enemy appeared in the level)}. This is the incoming strip.
+## (1..0 after its enemy appeared in the level), age (seconds since its line landed, 0 while it is in the air), waited
+## (seconds since it became ACTIVE, -1 while QUEUED)}. This is the incoming strip.
 func player_incoming() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	for seq in _open[BattleSession.PLAYER_ID]:
@@ -259,8 +264,14 @@ func player_incoming() -> Array[Dictionary]:
 		out.append({"seq": seq, "sender": r.sender, "kind": r.kind, "state": r.state, "spawned": r.spawned_at >= 0.0,
 			"phase": phase_of(r.state, r.spawned_at >= 0.0), "in_transit": not landed,
 			"flash": _fade(r.activated_at, ACTIVATION_FLASH), "fresh": _fade(r.landed_at, RECEIVE_FLASH) if landed else 0.0,
-			"arrive": _fade(r.spawned_at, SPAWN_FLASH)})
+			"arrive": _fade(r.spawned_at, SPAWN_FLASH), "age": maxf(clock - r.landed_at, 0.0),
+			"waited": clock - r.activated_at if r.activated_at >= 0.0 else -1.0})
 	return out
+
+## Whether WATCH OUT! shows: a bot has sent an enemy at the real player and its line is in the air or landed within the
+## last WATCH_OUT_HOLD seconds. Strongly inferred from the reference (doc 47 Q8); the pill is a view of this and nothing else.
+func watch_out() -> bool:
+	return clock < _alert_until
 
 ## (queued, arriving, in level) among the real player's unresolved attacks: `counts(PLAYER_ID).y` split in two.
 func player_phase_counts() -> Vector3i:

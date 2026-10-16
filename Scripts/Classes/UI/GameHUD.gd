@@ -24,6 +24,11 @@ func _process(delta: float) -> void:
 func handle_main_hud() -> void:
 	$Main.visible = not Settings.file.visuals.modern_hud
 	$ModernHUD.visible = Settings.file.visuals.modern_hud
+	if BattleScreen.is_active():
+		# Battle draws its own HUD inside the game window (BattleHud, doc 47 B35-LAYOUT-002): the classic row is hidden here and
+		# comes back by itself the moment the Battle screen is gone.
+		$Main.visible = false
+		$ModernHUD.visible = false
 	$Main/RedCoins.hide()
 	$Main/CoinCount.show()
 	%IGT.hide()

@@ -14,8 +14,9 @@ extends SceneTree
 const LEVEL_1_1 := "res://Scenes/Levels/SMB1/World1/1-1.tscn"
 const GOOMBA := "res://Scenes/Prefabs/Entities/Enemies/Goomba.tscn"
 
-## Strip A is the incoming-attack strip now (doc 44): its dark bar over the gold, empty in the middle.
-var STRIP_A_BAR := Color(0.26, 0.13, 0.05)
+## Strip A is the incoming bar (doc 47 B35-INCOMING-001): gold on the left third, then orange, then darker orange.
+var ZONE_GOLD := Color8(255, 208, 48)
+var ZONE_ORANGE := Color8(255, 150, 28)
 
 var failures := 0
 var args := {}
@@ -91,6 +92,10 @@ func grab(name: String) -> Image:
 func px(img: Image, x: float, y: float) -> Color:
 	return img.get_pixel(int((x + 0.5) * shot_scale), int((y + 0.5) * shot_scale))
 
+## The device pixel at logical canvas position (x, y), which may be a fraction of a logical pixel (the reference's hairlines).
+func dev(img: Image, x: float, y: float) -> Color:
+	return img.get_pixel(int(x * shot_scale), int(y * shot_scale))
+
 func near(a: Color, b: Color, tol := 0.04) -> bool:
 	return absf(a.r - b.r) <= tol and absf(a.g - b.g) <= tol and absf(a.b - b.b) <= tol
 
@@ -132,13 +137,15 @@ func _run() -> void:
 	check(absf(shot_scale * 480.0 - img.get_width()) < 0.5 and absf(shot_scale * 270.0 - img.get_height()) < 1.0, "the display shows the whole 480x270 canvas (%s at %.3fx)" % [img.get_size(), shot_scale])
 
 	# -- wallpaper behind the window ------------------------------------------------------------
-	check(near(px(img, 1, 135), BS.WALLPAPER), "the gold wallpaper fills the left margin (%s)" % px(img, 1, 135).to_html(false))
-	check(near(px(img, 478, 135), BS.WALLPAPER), "the gold wallpaper fills the right margin")
-	check(near(px(img, 106, 135), BS.WALLPAPER), "the wallpaper shows between the left panes and the frame")
-	check(near(px(img, 374, 135), BS.WALLPAPER), "the wallpaper shows between the frame and the right panes")
-	check(near(px(img, 109, 135), BS.FRAME_EDGE), "the frame edge is drawn next to the window")
-	check(near(px(img, 110.5, 135), BS.FRAME_FILL) or near(px(img, 111, 135), BS.FRAME_FILL), "the gold frame surrounds the window on the left (%s)" % px(img, 111, 135).to_html(false))
-	check(near(px(img, 368.5, 135), BS.FRAME_FILL) or near(px(img, 369, 135), BS.FRAME_FILL), "the gold frame surrounds the window on the right")
+	# (doc 47 B35-LAYOUT-006: wallpaper (255,190,0), frame light (255,217,56), frame dark (255,182,0), outline (59,51,33), within +-8/255)
+	var tol8 := 8.0 / 255.0 + 0.004
+	check(near(px(img, 0, 135), BS.WALLPAPER, tol8), "the measured gold wallpaper fills the left margin (%s)" % px(img, 0, 135).to_html(false))
+	check(near(px(img, 479, 135), BS.WALLPAPER, tol8), "the gold wallpaper fills the right margin")
+	check(near(px(img, 106, 135), BS.WALLPAPER, tol8), "the wallpaper shows between the left panes and the frame")
+	check(near(px(img, 374, 135), BS.WALLPAPER, tol8), "the wallpaper shows between the frame and the right panes")
+	check(near(px(img, 109, 135), BS.FRAME_LIGHT, tol8) and near(px(img, 370, 135), BS.FRAME_LIGHT, tol8), "the frame's light band is drawn outside both sides of the window (%s)" % px(img, 109, 135).to_html(false))
+	check(near(px(img, 110.5, 135), BS.FRAME_DARK, 0.02) and near(px(img, 368.5, 135), BS.FRAME_DARK, 0.02), "...and its deeper gold band inside it")
+	check(near(dev(img, 111.75, 135), BS.OUTLINE, tol8) and near(dev(img, 368.25, 135), BS.OUTLINE, tol8), "the thin dark outline sits just outside the window (%s)" % dev(img, 111.75, 135).to_html(false))
 	# -- the window is exactly the classic 256-wide view, not a wider level under the panels ------------
 	check(is_sky(px(img, 112, 100)) and is_sky(px(img, 367, 100)), "the window's first and last columns are the level (sky)")
 	check(not is_sky(px(img, 111, 100)) and not is_sky(px(img, 368, 100)), "the level does not continue past the window edge")
@@ -146,24 +153,38 @@ func _run() -> void:
 	# legitimately show sky now that every pane is a live 1-1 preview.
 	var sky_outside := 0
 	for y in [20, 60, 100, 140, 180, 220, 255, 264]:
-		for x in [0, 2, 106, 108, 371, 372, 374, 479]:
+		for x in [0, 106, 108, 371, 372, 374, 479]:
 			if is_sky(px(img, x, y)):
 				sky_outside += 1
 	check(sky_outside == 0, "no level sky anywhere around the window (%d sampled pixels)" % sky_outside)
-	# (strip B carries the small provisional targeting readout in its middle, so its colour is sampled at both ends)
-	check(near(px(img, 240, 247), STRIP_A_BAR) and near(px(img, 118, 259), BS.STRIP_B_COLOR) and near(px(img, 362, 259), BS.STRIP_B_COLOR), "the two strips sit under the window (strip A carries the incoming bar)")
+	# (the eye counter sits at strip B's left end and WATCH OUT! in its middle, so its gold is sampled between them and at the right)
+	check(near(px(img, 240, 242), ZONE_ORANGE, tol8) and near(px(img, 150, 242), ZONE_GOLD, tol8) and near(px(img, 160, 255), BS.STRIP_B_COLOR, tol8) and near(px(img, 362, 255), BS.STRIP_B_COLOR, tol8),
+		"the two strips sit under the window: the incoming bar's gold and orange zones, and the status strip's gold")
+	var strip_a_dark: Color = px(img, 340, 242)
+	check(strip_a_dark.r > 0.8 and strip_a_dark.g < 0.5 and strip_a_dark.b < 0.2, "the bar's right zone is the darker orange (%s)" % strip_a_dark.to_html(false))
+	# -- the window shows rows 8..231 of the 256x240 view: nothing of the hidden rows leaks above or below it ----
+	check(is_sky(px(img, 240, 8)) and is_sky(px(img, 300, 100)), "the window's first row (view row 8) is the level")
+	check(not is_sky(px(img, 240, 7)) and not is_sky(px(img, 240, 232)), "the rows above and below the 224-row window are the frame, not the level")
 	# -- HUD over the window -----------------------------------------------------------------------
 	# (the right edge is not checked: without translations the sandbox's long locale key can run past it)
-	var hud_in := 0
-	var hud_left_of_window := 0
-	for y in range(int(game.position.y), int(game.position.y) + 18):
-		for x in range(100, 368):
+	var timer_r: Rect2 = scr.layout.hud.timer
+	var coin_r: Rect2 = scr.layout.hud.coins
+	var timer_ink := 0
+	for y in range(int(timer_r.position.y), int(timer_r.end.y)):
+		for x in range(int(timer_r.position.x), int(timer_r.end.x)):
+			if not is_sky(px(img, x, y)):
+				timer_ink += 1
+	var coin_ink := 0
+	for y in range(int(coin_r.position.y), int(coin_r.end.y)):
+		for x in range(int(coin_r.position.x), int(coin_r.end.x)):
+			if not is_sky(px(img, x, y)):
+				coin_ink += 1
+	var left_of_window := 0
+	for y in range(int(game.position.y), int(game.end.y)):
+		for x in range(104, 110):
 			if bright(px(img, x, y)):
-				if x >= 112:
-					hud_in += 1
-				elif x >= 104: # between the panes and the window: the frame, never HUD
-					hud_left_of_window += 1
-	check(hud_in > 20 and hud_left_of_window == 0, "the HUD text is drawn over the window, not beside it (%d bright pixels in, %d left of it)" % [hud_in, hud_left_of_window])
+				left_of_window += 1
+	check(timer_ink > 120 and coin_ink > 15 and left_of_window == 0, "the Battle HUD (timer, coins) is drawn over the window, not beside it (%d / %d non-sky pixels, %d bright pixels left of it)" % [timer_ink, coin_ink, left_of_window])
 
 	# -- enemy activation follows the 256-wide window ------------------------------------------------
 	var cam: Camera2D = scr.game_viewport.get_camera_2d()
@@ -223,10 +244,10 @@ func _run() -> void:
 	if opaque:
 		fade = await grab("battle_m1_fade_in_window")
 		check(px(fade, 240, 100).r < 0.05 and px(fade, 240, 100).g < 0.05 and px(fade, 240, 100).b < 0.05, "the fade blacks out the game window")
-		check(px(fade, 112, 3).get_luminance() < 0.05 and px(fade, 367, 242).get_luminance() < 0.05, "...up to the window's corners")
-		check(near(px(fade, 1, 135), BS.WALLPAPER) and near(px(fade, 478, 135), BS.WALLPAPER), "...and the Battle wallpaper around it is untouched")
-		check(near(px(fade, 110.5, 135), BS.FRAME_FILL) or near(px(fade, 111, 135), BS.FRAME_FILL), "...as is the frame")
-		check(near(px(fade, 240, 247), STRIP_A_BAR), "...and the strips under the window")
+		check(px(fade, 112, 8).get_luminance() < 0.05 and px(fade, 367, 231).get_luminance() < 0.05, "...up to the window's corners")
+		check(near(px(fade, 0, 135), BS.WALLPAPER, tol8) and near(px(fade, 479, 135), BS.WALLPAPER, tol8), "...and the Battle wallpaper around it is untouched")
+		check(near(px(fade, 109, 135), BS.FRAME_LIGHT, tol8), "...as is the frame")
+		check(near(px(fade, 240, 242), ZONE_ORANGE, tol8), "...and the strips under the window")
 		var panes_ok := true
 		for r in scr.layout.slots:
 			if px(fade, r.position.x + 16, r.position.y + 20).get_luminance() < 0.05:
@@ -240,7 +261,7 @@ func _run() -> void:
 		quit(1)
 		return
 	var after: Image = await grab("battle_m1_after_fade")
-	check(near(px(after, 1, 135), BS.WALLPAPER), "wallpaper still intact after the fade")
+	check(near(px(after, 0, 135), BS.WALLPAPER, tol8), "wallpaper still intact after the fade")
 
 	# -- a round ends: the real player dies, the result card dims the window only, the next round starts ----------------
 	var round_before: int = scr.battle_round.round_number
@@ -252,12 +273,61 @@ func _run() -> void:
 	check(shown, "the real player's death ends the round with the result card")
 	await frames(3)
 	var result: Image = await grab("battle_m3_round_result")
-	check(px(result, 240, 100).get_luminance() < 0.2 and near(px(result, 1, 135), BS.WALLPAPER), "the result card dims the game window only")
+	check(px(result, 120, 100).get_luminance() < 0.2 and near(px(result, 106, 135), BS.WALLPAPER, tol8), "the result card dims the game window only")
 	scr.battle_round.time_in_state = scr.battle_round.RESULTS_MAX_SECONDS
 	var again: bool = await wait_until(func(): return level_running() and scr.battle_round.round_number == round_before + 1, 1500)
 	check(again and current_scene == scr, "the next round runs in the same Battle screen (never the title)")
 	await frames(90)
 	await grab("battle_m3_next_round_pre_round")
+
+	# -- the targeting reticle, the selector and the KO card (UI fidelity pass) ------------------------------------------------------
+	await frames(40)
+	var sess = SESSION.current
+	var ret = scr.target_reticle
+	var shot: Image = await grab("battle_ui_reticle")
+	check(ret.visible and ret.target >= 1, "the reticle is on the player's target pane")
+	var tr: Rect2 = scr.layout.slots[ret.target - 1]
+	var corners_red := 0
+	for c in [Vector2(-0.875, -0.875), Vector2(tr.size.x + 0.875, -0.875), Vector2(-0.875, tr.size.y + 0.875), Vector2(tr.size.x + 0.875, tr.size.y + 0.875)]:
+		var col: Color = dev(shot, tr.position.x + c.x, tr.position.y + c.y)
+		if col.r > 0.88 and col.g < 0.2 and col.b < 0.28:
+			corners_red += 1
+	check(corners_red == 4, "red (r>225, g<50, b<70) at all four corners of the target pane (%d of 4)" % corners_red)
+	var other_red := 0
+	for i in scr.layout.slots.size():
+		if i + 1 == ret.target:
+			continue
+		var r: Rect2 = scr.layout.slots[i]
+		if absf(r.position.x - tr.position.x) < 40.0 and absf(r.position.y - tr.position.y) < 50.0:
+			continue # a neighbour's corner sample is inside the target's own bracket (the bracket fills the gap between panes)
+		var col: Color = dev(shot, r.position.x - 0.875, r.position.y - 0.875)
+		if col.r > 0.88 and col.g < 0.2 and col.b < 0.28:
+			other_red += 1
+	check(other_red == 0, "and at no other pane's corner (%d)" % other_red)
+	var Mode = load("res://Scripts/Classes/Battle/BattleTargeting.gd").Mode
+	scr.select_target_mode(Mode.LOWEST_TIME)
+	await frames(12)
+	var sel_shot: Image = await grab("battle_ui_selector")
+	var pill: Rect2 = scr.selector.pill_rect(Mode.LOWEST_TIME, scr.selector.label_scale_at(scr.selector.age))
+	var gold: Color = px(sel_shot, pill.position.x + 2.0, pill.get_center().y)
+	check(gold.r > 0.9 and gold.g > 0.7 and gold.b < 0.55, "the chosen pill is filled gold, the cross opaque just after the change (%s)" % gold.to_html(false))
+	await frames(150)
+	var rest_shot: Image = await grab("")
+	var rest_gold: Color = px(rest_shot, pill.position.x + 2.0, pill.get_center().y)
+	check(scr.selector.opacity() == scr.selector.REST_ALPHA and (rest_gold.r - rest_gold.b) < (gold.r - gold.b), "...and it has faded back to translucent at rest (%s)" % rest_gold.to_html(false))
+	scr.select_target_mode(Mode.RANDOM)
+	var victim := 1
+	sess.report_ko(victim, sess.KoCause.HAZARD)
+	var ko_pane = scr.panes[victim - 1]
+	var marked: bool = await wait_until(func(): return ko_pane.marked, 1200)
+	check(marked, "the KO'd opponent's pane shows its KO card once the picture catches up")
+	await wait_until(func(): return not ko_pane.is_animating(), 240)
+	await frames(3)
+	var card_shot: Image = await grab("battle_ui_ko_card")
+	var vr: Rect2 = scr.layout.slots[victim - 1]
+	var blue: Color = px(card_shot, vr.position.x + 3.0, vr.position.y + 16.0)
+	check(blue.b > 0.65 and blue.r < 0.35 and blue.g < 0.55, "the KO card is blue (%s)" % blue.to_html(false))
+	check(ko_pane.position == vr.position and ko_pane.size == vr.size and ko_pane.placement == sess.contestants[victim].placement and ko_pane.placement > 1, "it never moved and carries the contestant's placement (%d)" % ko_pane.placement)
 
 	# -- leave Battle ----------------------------------------------------------------------------------------------
 	HANDLER.quit_battle()

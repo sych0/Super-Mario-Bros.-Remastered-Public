@@ -191,6 +191,25 @@ func test_pre_round_freezes() -> void:
 	check(state() == ROUND.State.PRE_ROUND and rnd().frozen(), "round 1 is in PRE_ROUND")
 	check(scr.game_viewport.process_mode == Node.PROCESS_MODE_DISABLED and scr.game_frozen, "the game window is frozen")
 	check(scr._banner.visible and scr._banner.text == "READY", "READY is showing")
+	# the real match-start sequence (doc 47 B35-RESULT-001) runs at its documented length; this suite shortens the pre-round,
+	# so the round is told the full length here and its clock is set to each probe (the screen shows what the round says)
+	var short_length: float = rnd().pre_round_seconds
+	rnd().pre_round_seconds = ROUND.PRE_ROUND_SECONDS
+	for probe in [[0.3, "HERE WE GO..."], [1.0, "READY"], [2.6, "3"], [3.6, "2"], [4.6, "1"]]:
+		rnd().time_in_state = probe[0]
+		await frames(2)
+		check(state() == ROUND.State.PRE_ROUND and scr._banner.visible and scr._banner.text == probe[1] and scr._banner.size == scr.layout.game.size, "%.1f s into the pre-round the window says %s" % [probe[0], probe[1]])
+	var held: float = rnd().time_in_state
+	G.game_paused = true
+	await frames(40)
+	check(is_equal_approx(rnd().time_in_state, held) and scr._banner.text == "1" and is_equal_approx(scr._banner.age, scr._banner.age), "the pause menu holds the countdown on its word (%.2f s)" % rnd().time_in_state)
+	var banner_age: float = scr._banner.age
+	await frames(10)
+	check(is_equal_approx(scr._banner.age, banner_age), "...and its pop animation")
+	G.game_paused = false
+	rnd().pre_round_seconds = short_length
+	rnd().time_in_state = 0.0
+	check(scr.game_frozen and scr.game_viewport.process_mode == Node.PROCESS_MODE_DISABLED, "(the window stayed frozen through all of it)")
 	var p := player()
 	var x0 := p.global_position.x
 	var ticks0: int = session().tick_count

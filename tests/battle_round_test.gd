@@ -24,6 +24,7 @@ func _initialize() -> void:
 	test_many_rounds()
 	test_pause()
 	test_override()
+	test_match_start_sequence()
 	if failures > 0:
 		printerr("%d Battle round test(s) failed" % failures)
 	else:
@@ -40,7 +41,7 @@ func test_states_and_banner() -> void:
 	check(r.state == R.State.LOADING and r.round_number == 1 and r.end_cause == R.End.NONE, "a new round starts LOADING as round 1")
 	check(r.banner_text() == "" and not r.frozen(), "nothing is shown or frozen while loading")
 	check(r.level_ready() and r.state == R.State.PRE_ROUND, "the first level being ready starts the pre-round")
-	check(r.frozen() and r.banner_text() == "READY", "the pre-round freezes the game and shows READY")
+	check(r.frozen() and r.banner_text() == "HERE WE GO...", "the pre-round freezes the game and opens with HERE WE GO...")
 	check(not r.level_ready(), "level_ready is ignored outside LOADING (a later level of the round does not restart it)")
 	r.update(R.PRE_ROUND_SECONDS - 0.1)
 	check(r.state == R.State.PRE_ROUND and r.frozen(), "still frozen just before the pre-round ends")
@@ -181,3 +182,52 @@ func test_override() -> void:
 	check(is_equal_approx(r.pre_round_seconds, 0.25) and R.default_pre_round_seconds() == 0.25, "the test hook shortens the pre-round")
 	R.pre_round_override = -1.0
 	check(R.default_pre_round_seconds() == R.PRE_ROUND_SECONDS or OS.is_debug_build(), "the default pre-round is %.1f s" % R.PRE_ROUND_SECONDS)
+
+## The match-start words (doc 47 B35-RESULT-001): HERE WE GO... 0.75 s, READY 1.5 s, 3 / 2 / 1 a second each, then play is
+## released at GO!, which lingers 0.8 s. The words are a pure function of the time spent in PRE_ROUND.
+func test_match_start_sequence() -> void:
+	check(is_equal_approx(R.PRE_ROUND_SECONDS, 5.25) and R.HERE_WE_GO_SECONDS == 0.75 and R.READY_SECONDS == 1.5 and R.COUNT_SECONDS == 1.0 and R.COUNT_FROM == 3, "the pre-round is 0.75 + 1.5 + 3 x 1.0 = 5.25 s")
+	var probes := [
+		[0.0, "HERE WE GO..."], [0.74, "HERE WE GO..."], [0.76, "READY"], [2.24, "READY"], [2.26, "3"], [3.24, "3"],
+		[3.26, "2"], [4.24, "2"], [4.26, "1"], [5.24, "1"],
+	]
+	for pr in probes:
+		var r = new_round()
+		r.level_ready()
+		r.update(pr[0])
+		check(r.state == R.State.PRE_ROUND and r.frozen() and r.banner_text() == pr[1], "%.2f s into the pre-round the banner says %s (%s)" % [pr[0], pr[1], r.banner_text()])
+	var g = new_round()
+	g.level_ready()
+	g.update(R.PRE_ROUND_SECONDS - 0.01)
+	check(g.state == R.State.PRE_ROUND and g.banner_text() == "1", "still frozen on the last hundredth of the 1")
+	g.update(0.02)
+	check(g.state == R.State.PLAYING and not g.frozen() and g.banner_text() == "GO!", "play is released exactly as GO! appears")
+	g.update(R.GO_SECONDS - 0.05)
+	check(g.banner_text() == "GO!", "GO! lingers for its 0.8 s")
+	g.update(0.1)
+	check(g.banner_text() == "", "...and goes")
+	# the words' own clock restarts with each word (the banner pops on it)
+	var a = new_round()
+	a.level_ready()
+	a.update(2.25 + 0.3)
+	var step: Dictionary = a.banner_step()
+	check(step.banner == R.Banner.COUNT and step.count == 3 and is_equal_approx(float(step.age), 0.3), "the count 3 has been up 0.3 s (%s)" % step)
+	# a pause holds the sequence on its word
+	var p = new_round()
+	p.level_ready()
+	p.update(3.5)
+	p.paused = true
+	p.update(30.0)
+	check(p.state == R.State.PRE_ROUND and p.banner_text() == "2", "a pause holds the countdown on its word (%s)" % p.banner_text())
+	p.paused = false
+	p.update(0.5)
+	check(p.banner_text() == "2" and p.state == R.State.PRE_ROUND, "...and it carries on from there")
+	# a shortened pre-round (tests, --battle-preround) is plain READY, then GO!
+	R.pre_round_override = 0.5
+	var s = new_round()
+	s.level_ready()
+	s.update(0.2)
+	check(s.banner_text() == "READY", "a shortened pre-round shows plain READY (%s)" % s.banner_text())
+	s.update(0.4)
+	check(s.banner_text() == "GO!", "...then GO!")
+	R.pre_round_override = -1.0

@@ -303,9 +303,13 @@ func test_effect_pixels_for(kind: int) -> void:
 
 # ---- the strip's colours -------------------------------------------------------------------------------------------
 
-func slot_color(img: Image, slot: int, dx := 1, dy := 2) -> Color:
+## The colour of the `slot`-th icon's tile on the incoming bar (icons in send order; see BattleIncomingStrip.place_all), sampled `dx`
+## from the icon's centre and `dy` below the bar's top: by default just inside the tile's top-left, left of the enemy's little picture.
+func slot_color(img: Image, slot: int, dx := -3.4, dy := 2.4) -> Color:
+	var bar = current_scene.incoming_strip
+	var xs: PackedFloat32Array = bar.place_all(bar.items, bar.size.x)
 	var strip_rect: Rect2 = current_scene.layout.strip_a
-	return canvas_color(img, int(strip_rect.position.x + STRIP.FIRST_ICON_X) + slot * int(STRIP.ICON_W) + dx, int(strip_rect.position.y) + dy)
+	return canvas_color(img, int(floorf(strip_rect.position.x + xs[slot] + dx)), int(floorf(strip_rect.position.y + dy)))
 
 func test_strip_colours() -> void:
 	print("-- the strip, drawn: one colour per phase")
@@ -315,12 +319,12 @@ func test_strip_colours() -> void:
 		atks.append(session.report_enemy_defeat(alive_bot(i), KIND.GOOMBA if i % 2 == 0 else KIND.KOOPA))
 	await frames(8)
 	var img := await screen_image("strip_1_in_transit")
-	var corner_dot := slot_color(img, 0, 0, 1)
+	var corner_dot := slot_color(img, 0, -4.0, 1.0)
 	var transit_ok := true
 	for i in 5:
-		transit_ok = transit_ok and luma(slot_color(img, i)) < 0.2
-	check(transit_ok, "in transit: the icons are hollow (dark inside, not the queued brown)")
-	check(luma(corner_dot) > 0.35, "...with a dotted outline (the corner dot is light: %s)" % [corner_dot])
+		transit_ok = transit_ok and near(slot_color(img, i), STRIP.ZONE_DARK, 0.1) # (all five wait at the bar's right end, in its darkest zone)
+	check(transit_ok, "in transit: the icons are hollow (the bar's own colour inside, not the queued brown) (%s)" % [slot_color(img, 0)])
+	check(luma(corner_dot) > luma(slot_color(img, 0)) + 0.08, "...with a dotted outline (the corner dot is lighter: %s)" % [corner_dot])
 	await frames(75) # the lines have landed and the 'new' outlines have faded
 	img = await screen_image("strip_2_queued")
 	var queued_ok := true

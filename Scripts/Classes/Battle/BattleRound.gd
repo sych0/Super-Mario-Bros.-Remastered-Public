@@ -10,7 +10,8 @@ extends RefCounted
 ##      └──────────────────── next round ───────────────────────┘
 ##
 ## * LOADING     a fresh round has been started; the game window is loading World 1-1.
-## * PRE_ROUND   World 1-1 is on screen, gameplay and the Battle clock are frozen ("READY").
+## * PRE_ROUND   World 1-1 is on screen, gameplay and the Battle clock are frozen while the window counts down
+##               (HERE WE GO..., READY, 3, 2, 1: `banner_step`); play is released at GO!.
 ## * PLAYING     normal play; the Battle clock runs.
 ## * ROUND_OVER  the player died, ran out of time, or is the last one standing. A death plays out
 ##               its animation first (`death_finished()` ends it); a win holds for a moment.
@@ -22,7 +23,14 @@ extends RefCounted
 enum State {LOADING, PRE_ROUND, PLAYING, ROUND_OVER, RESULTS}
 enum End {NONE, DEATH, TIMEOUT, WIN}
 
-const PRE_ROUND_SECONDS := 2.5
+## The match start (doc 47 B35-RESULT-001, UI fidelity pass): HERE WE GO... for 0.75 s, READY for 1.5 s, then 3, 2 and 1 for
+## a second each; play is released at GO!, which lingers for GO_SECONDS. Gameplay and the Battle clock are frozen for all of
+## it (the pre-round), so the only thing the longer start changes is the words.
+const HERE_WE_GO_SECONDS := 0.75
+const READY_SECONDS := 1.5
+const COUNT_SECONDS := 1.0 ## each of 3, 2, 1
+const COUNT_FROM := 3
+const PRE_ROUND_SECONDS := HERE_WE_GO_SECONDS + READY_SECONDS + COUNT_SECONDS * COUNT_FROM
 const GO_SECONDS := 0.8 ## how long "GO!" lingers once play is released
 const WIN_HOLD_SECONDS := 1.0 ## a win has no death animation: hold this long before the results
 const ROUND_OVER_MAX_SECONDS := 12.0 ## safety: a death sequence that never reports still reaches the results
@@ -120,12 +128,42 @@ func update(delta: float, confirm := false) -> bool:
 				return true
 	return false
 
-## "READY" while frozen, "GO!" just after play is released, otherwise nothing.
-func banner_text() -> String:
+## The words over the window, in order: HERE_WE_GO, READY, then COUNT_FROM down to 1, then GO after play is released.
+enum Banner {NONE, HERE_WE_GO, READY, COUNT, GO}
+
+## Where in the match-start sequence the round is: {banner: Banner, count: the number shown while COUNT (else 0),
+## age: seconds since that word began}. A shortened pre-round (a test, `--battle-preround`) is plain READY: the sequence
+## only runs at its documented length.
+func banner_step() -> Dictionary:
 	if state == State.PRE_ROUND:
-		return "READY"
+		if not is_equal_approx(pre_round_seconds, PRE_ROUND_SECONDS):
+			return {"banner": Banner.READY, "count": 0, "age": time_in_state}
+		var t := time_in_state
+		if t < HERE_WE_GO_SECONDS:
+			return {"banner": Banner.HERE_WE_GO, "count": 0, "age": t}
+		t -= HERE_WE_GO_SECONDS
+		if t < READY_SECONDS:
+			return {"banner": Banner.READY, "count": 0, "age": t}
+		t -= READY_SECONDS
+		var n := mini(int(t / COUNT_SECONDS), COUNT_FROM - 1)
+		return {"banner": Banner.COUNT, "count": COUNT_FROM - n, "age": t - n * COUNT_SECONDS}
 	if state == State.PLAYING and released_from_pre_round and time_in_state < GO_SECONDS:
-		return "GO!"
+		return {"banner": Banner.GO, "count": 0, "age": time_in_state}
+	return {"banner": Banner.NONE, "count": 0, "age": 0.0}
+
+## The words as text: "HERE WE GO...", "READY", "3", "2", "1" while frozen, "GO!" just after play is released,
+## otherwise nothing.
+func banner_text() -> String:
+	var step := banner_step()
+	match int(step.banner):
+		Banner.HERE_WE_GO:
+			return "HERE WE GO..."
+		Banner.READY:
+			return "READY"
+		Banner.COUNT:
+			return str(int(step.count))
+		Banner.GO:
+			return "GO!"
 	return ""
 
 ## True while the game window and the Battle clock must be frozen.

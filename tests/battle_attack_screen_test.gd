@@ -145,6 +145,7 @@ func _run() -> void:
 	await test_bot_send()
 	await test_panes_and_previews()
 	await test_player_incoming_ui()
+	await test_ui_fidelity()
 	await test_round_restart()
 	await test_attacks_off()
 	await test_classic()
@@ -218,21 +219,22 @@ func test_target_reticle() -> void:
 			shown += 1
 	check(shown == 1 and sc.panes[t - 1].ko == false, "exactly one reticle, on a living pane")
 	# the mode keys
-	check(s.player_target_mode == BattleTargeting_Mode().RANDOM and sc.get_node("TargetModeReadout").text.contains("RANDOM") and sc.get_node("TargetModeReadout").text.contains("PROVISIONAL"), "the provisional readout says Random, and that it is provisional")
+	check(s.player_target_mode == BattleTargeting_Mode().RANDOM and sc.selector.mode == BattleTargeting_Mode().RANDOM and sc.selector.visible, "the selector shows Random chosen")
+	check(sc.get_node_or_null("TargetModeReadout") == null, "the provisional text readout of M-T1 is gone")
 	for i in range(1, 35):
 		s.contestants[i].time_left = 400
 	s.contestants[23].time_left = 90
 	root.push_input(key_event(KEY_I))
 	await frames(3)
 	check(s.player_target_mode == BattleTargeting_Mode().LOWEST_TIME and ret.target == 23, "the I key selects Lowest Time and the reticle goes to the lowest time (#23)")
-	check(sc.get_node("TargetModeReadout").text.contains("LOWEST TIME"), "the readout follows")
+	check(sc.selector.mode == BattleTargeting_Mode().LOWEST_TIME and sc.selector.age < sc.selector.FADE_END and sc.selector.opacity() > sc.selector.REST_ALPHA, "the selector follows, and lights up (age %.2f, opacity %.2f)" % [sc.selector.age, sc.selector.opacity()])
 	root.push_input(key_event(KEY_K))
 	await frames(3)
 	check(s.player_target_mode == BattleTargeting_Mode().ATTACKERS and ret.visible and ret.target == s.target_of(0), "the K key selects Attackers")
 	var before_mode: int = s.player_target_mode
 	root.push_input(key_event(KEY_L))
 	await frames(3)
-	check(s.player_target_mode == before_mode and sc.get_node("TargetModeReadout").text.contains("NOT AVAILABLE"), "the L key (Most Coins) is refused and the readout says it is not available yet")
+	check(s.player_target_mode == before_mode and sc.selector.mode == before_mode and sc.selector.refused_mode == BattleTargeting_Mode().MOST_COINS and sc.selector.refuse_age < sc.selector.REFUSE_SECONDS, "the L key (Most Coins) is refused: the mode stays and the pill shows it is not available")
 	var echo := key_event(KEY_J)
 	echo.echo = true
 	root.push_input(echo)
@@ -463,6 +465,83 @@ func test_player_incoming_ui() -> void:
 	await frames(3)
 	check(strip.rows.size() == 3 and not strip.rows.any(func(r): return r.seq == first) and strip.counts == auth_counts(0), "its icon is gone and the waiting one took its place (%s)" % [strip.counts])
 
+# ---- the SMB35 UI pass on the real screen (doc 50) ---------------------------------------------------------------------
+
+func test_ui_fidelity() -> void:
+	print("-- the Battle HUD, selector, status strip and incoming bar on the real screen")
+	var sc = screen()
+	var s = session()
+	var Mode = BattleTargeting_Mode()
+	s.attacks.targeting = load("res://Scripts/Classes/Battle/BattleTargetingModes.gd").new() # (the earlier tests pinned every send to one target)
+	var sel = sc.selector
+	check(sel.get_parent() == sc.hud and sc.hud.get_parent() == sc and sc.hud.get_index() > sc.game_clip.get_index() and sc.hud.mouse_filter == Control.MOUSE_FILTER_IGNORE, "the selector is part of the HUD over the game window, and takes no input")
+	check(sc.get_node_or_null("TargetModeReadout") == null, "the provisional text readout is gone")
+	check(sc.hud.coins == G.coins and sc.hud.time_left == s.get_player().time_left, "the HUD shows the classic game's coin count and the player's Battle time")
+	# the selector follows the session, and the keys, and what the session refuses
+	s.set_player_target_mode(Mode.ATTACKERS)
+	await frames(2)
+	check(sel.mode == Mode.ATTACKERS and sel.age < 0.5, "a mode the session changes shows in the selector at once")
+	var tick0: int = s.tick_count
+	# a pause holds the selector's and the reticle's animation (and the keys do nothing)
+	sc.select_target_mode(Mode.LOWEST_TIME)
+	await frames(2)
+	var age0: float = sel.age
+	var punch0: float = sc.target_reticle.pulse_age
+	G.game_paused = true
+	paused = true
+	await frames(30)
+	check(is_equal_approx(sel.age, age0) and is_equal_approx(sc.target_reticle.pulse_age, punch0), "a pause freezes the selector's fade and the reticle's punch (age %.2f, %.2f)" % [sel.age, sc.target_reticle.pulse_age])
+	check(not sc.select_target_mode(Mode.RANDOM) and s.player_target_mode == Mode.LOWEST_TIME and sel.mode == Mode.LOWEST_TIME, "...and no mode can be chosen meanwhile")
+	paused = false
+	G.game_paused = false
+	await frames(30)
+	check(sel.age > age0 + 0.3, "after the pause the animation runs on")
+	# Most Coins: shown as unavailable, refused, the mode is kept
+	var rng_before: int = s.attacks.player_rng.state if s.attacks.get("player_rng") != null else 0
+	var before: int = s.player_target_mode
+	check(not sel.available[Mode.MOST_COINS] and not s.target_mode_available(Mode.MOST_COINS), "Most Coins is drawn as unavailable (the session says so)")
+	check(not sc.select_target_mode(Mode.MOST_COINS) and s.player_target_mode == before and sel.mode == before and sel.refused_mode == Mode.MOST_COINS and sel.refuse_age < 0.2, "choosing Most Coins is refused: the mode is kept and its pill reacts")
+	check((s.attacks.player_rng.state if s.attacks.get("player_rng") != null else 0) == rng_before, "no random stream moved")
+	# every key of the cross reaches the selector through the screen
+	for pair in [[KEY_J, Mode.RANDOM], [KEY_I, Mode.LOWEST_TIME], [KEY_K, Mode.ATTACKERS]]:
+		root.push_input(key_event(pair[0]))
+		await frames(2)
+		check(s.player_target_mode == pair[1] and sel.mode == pair[1] and sel.opacity() == 1.0, "the %s key selects %s: the selector goes opaque on that frame" % [OS.get_keycode_string(pair[0]), BattleTargeting.mode_name(pair[1])])
+	sc.select_target_mode(Mode.RANDOM)
+	# the status strip: the eye counts who is aiming at the player; WATCH OUT! follows a bot's send
+	var strip = sc.status_strip
+	await frames(3)
+	check(strip.eye == s.attackers_of(0).size() and strip.get_index() > sc.incoming_strip.get_index() - 1, "the eye counter is the number of opponents aiming at the player (%d)" % strip.eye)
+	await frames(60 * 4)
+	check(not strip.watch_out, "(WATCH OUT! is off while no bot is sending)")
+	fixed_target(0)
+	s.report_enemy_defeat(alive_bot(7), TYPES.Kind.KOOPA)
+	await frames(3)
+	check(strip.watch_out and sc.attack_view.watch_out(), "a bot sends an enemy at the player: WATCH OUT! shows")
+	await frames(60 * 3)
+	check(not strip.watch_out, "...and goes again about a second after the line has landed")
+	fixed_target(alive_bot(9))
+	s.report_enemy_defeat(0, TYPES.Kind.GOOMBA)
+	await frames(10)
+	check(not strip.watch_out, "the player's own send never shows it")
+	# the incoming bar: phases and positions on the real screen
+	fixed_target(0)
+	var made = s.report_enemy_defeat(alive_bot(11), TYPES.Kind.GOOMBA)
+	await frames(6)
+	var bar = sc.incoming_strip
+	var row: Dictionary = bar.rows[bar.rows.size() - 1]
+	check(row.seq == made.seq and row.phase == BattleAttackPresentationPhase().QUEUED, "a new attack on the player is a QUEUED icon at the bar's right end")
+	var xs: PackedFloat32Array = bar.place_all(bar.items, bar.size.x)
+	check(xs[xs.size() - 1] > bar.size.x * 0.6, "...near the right end (x %.1f of %.1f)" % [xs[xs.size() - 1], bar.size.x])
+	check(bar.size == sc.layout.strip_a.size and bar.position == sc.layout.strip_a.position, "the bar is the reference's strip A")
+	# a power-up shows in the bar's player icon
+	bar.set_power(2)
+	check(bar.power == 2, "the bar's player icon follows the power state")
+	bar.set_power(int(G.player_power_states[0]))
+
+func BattleAttackPresentationPhase():
+	return load("res://Scripts/Classes/Battle/BattleAttackPresentation.gd").Phase
+
 # ---- a new round -----------------------------------------------------------------------------------------------------
 
 func test_round_restart() -> void:
@@ -499,6 +578,13 @@ func test_round_restart() -> void:
 			tracks_clean = false
 	check(tracks_clean and sc.driver.session == session(), "and no preview keeps an incoming enemy (its tracks are the new round's)")
 	check(session().player_target_mode == BattleTargeting_Mode().RANDOM and sc.target_reticle.target == session().target_of(0) and sc.target_reticle.visible, "the new round starts in Random with the reticle on its own first target")
+	check(sc.selector.mode == BattleTargeting_Mode().RANDOM and not sc.status_strip.watch_out and sc.status_strip.eye == session().attackers_of(0).size() and sc.incoming_strip.ghosts.is_empty(), "the selector, WATCH OUT!, the eye counter and the bar start the new round clean")
+	var cards := 0
+	for pane in sc.panes:
+		if pane.marked or pane.ko or pane.is_animating():
+			cards += 1
+	check(cards == 0, "no KO card of the finished round survives into the new one")
+	check(sc.badge_alive.value == "%d/35" % session().alive_count and sc.badge_alive.value == "35/35", "the alive badge reads 35/35 again")
 	quiet_bots()
 
 # ---- attacks off -----------------------------------------------------------------------------------------------------
@@ -514,7 +600,7 @@ func test_attacks_off() -> void:
 	await frames(10)
 	var sc = screen()
 	check(not session().attacks.enabled and sc.attack_view == null, "with the attack loop off there is no attack presentation")
-	check(not sc.target_reticle.visible and sc.get_node("TargetModeReadout").text == "" and not session().set_player_target_mode(BattleTargeting_Mode().LOWEST_TIME), "...no reticle, no mode readout, and no mode to select")
+	check(not sc.target_reticle.visible and not sc.selector.visible and not session().set_player_target_mode(BattleTargeting_Mode().LOWEST_TIME), "...no reticle, no selector, and no mode to select")
 	check(sc.incoming_strip.rows.is_empty() and sc.attack_layer.view == null, "and the strip and the layer show nothing")
 	await frames(60 * 5)
 	check(session().events.filter(func(e): return e.type >= SESSION.EventType.SENT).is_empty() and sc.attack_view == null, "five seconds of play produce no attack events and no visuals")

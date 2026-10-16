@@ -141,13 +141,14 @@ func test_composition() -> void:
 	check(root.content_scale_stretch == Window.CONTENT_SCALE_STRETCH_FRACTIONAL, "canvas follows the user's scaling setting (fractional)")
 	check(BS.owns_window() and BS.is_active(), "BattleScreen owns the window")
 	check(G.current_level.get_parent() == scr.game_viewport, "1-1 runs inside GameViewport")
-	check(scr.game_viewport.get_parent() == scr.game_container and scr.game_container.get_parent() == scr, "GameViewport is shown by the centre window container")
+	check(scr.game_viewport.get_parent() == scr.game_container and scr.game_container.get_parent() == scr.game_clip and scr.game_clip.get_parent() == scr, "GameViewport is shown by the container inside the clipping centre window")
 	check(scr.game_viewport.size == Vector2i(256, 240), "GameViewport is exactly 256x240 (%s)" % scr.game_viewport.size)
 	check(scr.game_viewport.get_visible_rect().size == Vector2(256, 240), "GameViewport's visible rect is 256x240")
 	check(G.current_level.get_viewport() == scr.game_viewport, "the level's viewport is GameViewport")
 	check(G.current_level.get_viewport().get_visible_rect().size == Vector2(256, 240), "the level sees a 256x240 viewport, not 480x270")
 	check(player().get_viewport() == scr.game_viewport and player().get_viewport_rect().size == Vector2(256, 240), "Mario sees a 256x240 viewport")
-	check(scr.game_container.position == Vector2(112, 3) and scr.game_container.size == Vector2(256, 240), "window sits at (112, 3) at 1:1 (%s %s)" % [scr.game_container.position, scr.game_container.size])
+	check(scr.game_clip.get_rect() == Rect2(112, 8, 256, 224) and scr.game_clip.clip_contents, "the visible window is 256x224 at (112, 8) and clips what is outside (%s)" % scr.game_clip.get_rect())
+	check(scr.game_container.position == Vector2(0, -8) and scr.game_container.size == Vector2(256, 240), "the 256x240 view sits 8 rows above the window's top, so rows 8..231 show at 1:1 (%s %s)" % [scr.game_container.position, scr.game_container.size])
 	check(scr.game_container.texture_filter == CanvasItem.TEXTURE_FILTER_NEAREST, "window is upscaled with nearest filtering")
 	check(root.get_camera_2d() == null, "no current Camera2D in the Battle root viewport")
 	check(scr.game_viewport.get_camera_2d() != null, "the game camera is current in GameViewport")
@@ -174,7 +175,8 @@ func test_composition() -> void:
 	check(joint.get_node("LeftWall").position.x == -128.0 and joint.get_node("RightWall").position.x == 128.0, "camera walls are at +-128, as in Classic (%s / %s)" % [joint.get_node("LeftWall").position.x, joint.get_node("RightWall").position.x])
 	# Status text still binds to the session.
 	var session = SESSION.current
-	check(scr._alive_label.text == str(session.alive_count) and scr._time_label.text.begins_with("TIME "), "status is bound to the session (%s | %s)" % [scr._alive_label.text, scr._time_label.text])
+	check(scr.badge_alive.value == "%d/35" % session.alive_count and scr.hud.time_left == session.get_player().time_left, "status is bound to the session (%s | %s)" % [scr.badge_alive.value, scr.hud.time_left])
+	check(scr.hud.coins == G.coins, "the in-window coin counter is the classic game's own count (%s)" % scr.hud.coins)
 	# The audio listener of the root world follows the game camera (AudioManager's sounds live in the root).
 	var cam: Camera2D = scr.game_viewport.get_camera_2d()
 	check(scr.audio_listener != null and scr.audio_listener.global_position.is_equal_approx(cam.get_screen_center_position()), "root audio listener sits at the game camera (%s vs %s)" % [scr.audio_listener.global_position, cam.get_screen_center_position()])
@@ -229,12 +231,11 @@ func test_global_ui_and_pause() -> void:
 	print("-- global UI, fades, pause")
 	var scr = screen()
 	var hud: CanvasLayer = G.get_node("GameHUD")
-	var main: Control = hud.get_node("Main")
-	var rect := Rect2(main.global_position + hud.offset, main.size)
-	check(hud.offset == Vector2(0, 3), "GameHUD layer is moved down onto the window (%s)" % hud.offset)
-	check(main.visible and scr.layout.game.encloses(rect), "GameHUD sits over the game window: %s inside %s" % [rect, scr.layout.game])
-	check(is_equal_approx(rect.get_center().x, scr.layout.game.get_center().x), "GameHUD is centred on the window")
-	check(hud.get_node("Main").anchor_left == 0.5 and hud.get_node("Main").anchor_right == 0.5, "HUD uses the centred (CENTER_TOP) layout in Battle")
+	check(not hud.get_node("Main").visible and not hud.get_node("ModernHUD").visible, "the classic HUD row is hidden in Battle (the Battle HUD replaces it, doc 47 B35-LAYOUT-002)")
+	check(hud.offset == Vector2.ZERO, "the classic HUD layer itself is not moved")
+	var bhud: Control = scr.hud
+	check(bhud.get_parent() == scr and bhud.get_index() > scr.game_clip.get_index(), "the Battle HUD is drawn over the game window")
+	check(bhud.layout.hud.coins.position.x >= scr.layout.game.position.x and scr.layout.game.encloses(bhud.layout.hud.timer), "the Battle HUD's elements are inside the window")
 	var transition: CanvasLayer = G.get_node("Transition")
 	check(transition.custom_viewport == scr.game_viewport, "level fades are redirected into GameViewport")
 	check(G.get_node("Transition/Freeze").stretch_mode == TextureRect.STRETCH_KEEP, "the frozen frame is shown 1:1 in the window")
@@ -339,7 +340,7 @@ func test_routing_1_1_to_1_2() -> void:
 	check(root.content_scale_size == Vector2i(480, 270) and root.get_camera_2d() == null, "loading levels did not touch the Battle canvas or the root camera")
 	check(G.get_node("Transition").custom_viewport == scr.game_viewport, "fades are still confined to the window")
 	check(G.get_node("Transition").visible == false and not G.transitioning_scene, "the fade has finished")
-	check(scr.get_node("Wallpaper").get_index() < scr.game_container.get_index(), "wallpaper is still behind the window")
+	check(scr.get_node("Wallpaper").get_index() < scr.game_clip.get_index(), "wallpaper is still behind the window")
 	await frames(30)
 
 # ---- window ownership, settings drift, quit --------------------------------------------------------
@@ -421,6 +422,8 @@ func test_classic_unaffected() -> void:
 	check(player().camera_center_joint.get_node("RightWall").position.x == 160.0, "Classic camera walls follow the classic viewport (320 wide: +-160)")
 	check(not window_state().fade_redirected, "Classic fades cover the root")
 	check(G.get_node("GameHUD").offset == Vector2.ZERO, "Classic HUD has no Battle offset")
+	var classic_hud: CanvasLayer = G.get_node("GameHUD")
+	check(classic_hud.get_node("Main").visible != bool(root.get_node("Settings").file.visuals.modern_hud) and classic_hud.get_node("ModernHUD").visible == bool(root.get_node("Settings").file.visuals.modern_hud), "Classic shows its own HUD row again, as its setting says")
 	check(not G.current_level.has_node("BattleHandler") and SESSION.current == null, "Classic has no Battle handler or session")
 	# A Classic transition still replaces the scene the normal way.
 	var changes := scene_changes
