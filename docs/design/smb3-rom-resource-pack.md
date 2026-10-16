@@ -445,8 +445,8 @@ Decisions that protect that boundary:
 6. **Tests never contain ROM bytes or decoded pixels.** They hold hashes of generated output, dimensions and counts (§9). Hashes of derived images are not the images.
 7. **Licence hygiene for references.**
    - Southbird's disassembly has **no licence file** and embeds Nintendo data. Use it as documentation only; do not vendor any of it.
-   - SMB3-Foundry is **GPL-3.0**. Do not copy its code or its generated constants file. Re-derive offsets independently and cite them as facts.
-   - A future audio emulator must be licence-compatible with this repo's licence. Check `LICENSE` before choosing libgme (LGPL) vs NSFPlay (permissive) vs your own.
+   - SMB3-Foundry is **GPL-3.0**. This repo's `LICENSE` is also **GPL-3.0**, so porting Foundry logic is licence-compatible with attribution. Still prefer re-deriving offsets as facts in our own profile JSON, because Foundry's constants may embed tables computed from ROM data.
+   - Audio libraries: libgme (LGPL-2.1) and NSFPlay (permissive) are both compatible with GPL-3.0, and so is Mesen2 (GPL-3.0) code. The binding constraint is shipping native GDExtension builds, not licensing.
 8. **Pack metadata** clearly says "generated locally from your ROM". The import UI says a legitimate cartridge dump is required, mirroring the SMB1 flow.
 9. **Sharing.** A user who exports or shares `SMB3Assets` is distributing Nintendo-derived art. The import screen should say so. `ResourcePackTemplateCreator`-style tooling should not copy `SMB3Assets` into new templates. Today it already references `BaseAssets`; check it before allowing SMB3 here.
 
@@ -585,4 +585,4 @@ Estimate: a focused 1–2 weeks, most of it pinning tile and bank ids.
 - Shell spin frame count.
 - Whether US Rev 0 and Rev 1 CHR are byte-identical.
 - PRG0/PRG1 and PAL differences at ROM level. TCRF, Data Crystal and nesdev were unreachable during this research; check them manually.
-- The repo `LICENSE` vs candidate audio libraries.
+- Licensing is settled: the repo `LICENSE` is GPL-3.0 (see §6.7).
