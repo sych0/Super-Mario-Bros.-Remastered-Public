@@ -108,7 +108,7 @@ func _run() -> void:
 	await test_timeout_round()
 	await test_win_round()
 	await test_results_input()
-	await test_pause_over_results()
+	await test_pause_holds_round_timers()
 	await test_never_left_battle()
 	await test_five_rounds()
 	await test_quit(window_before)
@@ -352,20 +352,59 @@ func test_results_input() -> void:
 	BS.confirm_source = Callable()
 	await play()
 
-## The pause menu is reachable during the results; the next round must not start underneath it.
-func test_pause_over_results() -> void:
-	print("-- pause menu open when the results time out")
+## The pause menu holds the pre-round and the results: their timers stop while it is open.
+func test_pause_holds_round_timers() -> void:
+	print("-- pause menu holds the pre-round and the results")
 	var hud: CanvasLayer = G.get_node("GameHUD")
+	var scr = screen()
+	# RESULTS
 	var round_no: int = rnd().round_number
 	player().die()
 	await results_up()
+	await frames(10)
 	hud.activate_pause_menu()
 	await frames(3)
-	check(paused and hud.get_node("BattlePause").visible, "the pause menu opens over the results")
+	check(paused and hud.get_node("BattlePause").visible and Global_game_paused(), "the pause menu opens over the results")
+	var t0: float = rnd().time_in_state
+	BS.confirm_source = func() -> bool: return true # even a confirm must wait
+	await frames(150) # 2.5 s: longer than the results' lockout
+	check(state() == ROUND.State.RESULTS and rnd().round_number == round_no, "the results do not advance or accept confirm while the pause menu is open")
+	check(absf(rnd().time_in_state - t0) < 0.001, "the results timer is frozen (%.3f -> %.3f s)" % [t0, rnd().time_in_state])
+	rnd().time_in_state = ROUND.RESULTS_MAX_SECONDS - 0.5 # as if it had been up for 9.5 s
+	await frames(90)
+	check(state() == ROUND.State.RESULTS, "...even past what would be the auto-advance time")
+	hud.get_node("BattlePause").close()
+	BS.confirm_source = Callable()
+	await frames(5)
+	check(not paused and not Global_game_paused(), "closing the pause menu unpauses the game")
+	check(state() == ROUND.State.RESULTS and rnd().time_in_state > t0 - 0.001, "the results timer resumes from where it stopped")
 	await next_round()
-	check(rnd().round_number == round_no + 1 and not hud.get_node("BattlePause").visible and not paused, "the next round closes it: the menu is gone and the game is unpaused")
-	check(level_running() and state() == ROUND.State.PRE_ROUND, "...and the new round is in its pre-round")
+	check(rnd().round_number == round_no + 1 and level_running(), "the results then advance to the next round")
 	await play()
+	# PRE_ROUND (a longer countdown so there is something to hold)
+	ROUND.pre_round_override = 1.0
+	var n: int = rnd().round_number
+	player().die()
+	await results_up()
+	await next_round() # this round's pre-round is 1.0 s
+	check(state() == ROUND.State.PRE_ROUND, "a new round is in its pre-round")
+	var elapsed0: float = rnd().time_in_state
+	hud.activate_pause_menu()
+	await frames(3)
+	check(paused and hud.get_node("BattlePause").visible, "the pause menu opens during the pre-round")
+	var frozen_at: float = rnd().time_in_state
+	await frames(150)
+	check(state() == ROUND.State.PRE_ROUND and absf(rnd().time_in_state - frozen_at) < 0.001, "the pre-round does not run down while paused (%.3f s in after 2.5 s paused)" % rnd().time_in_state)
+	check(scr.game_frozen and session().tick_count == 0, "...and the game and the Battle clock are still frozen")
+	hud.get_node("BattlePause").close()
+	await frames(5)
+	check(state() == ROUND.State.PRE_ROUND, "closing the menu resumes the countdown (it had not run out)")
+	await play()
+	check(state() == ROUND.State.PLAYING and rnd().round_number == n + 1, "...and it then releases into PLAYING")
+	ROUND.pre_round_override = 0.5
+
+func Global_game_paused() -> bool:
+	return G.game_paused
 
 func test_never_left_battle() -> void:
 	print("-- no ordinary round ever left Battle")

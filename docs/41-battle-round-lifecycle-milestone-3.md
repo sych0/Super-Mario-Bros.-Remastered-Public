@@ -77,7 +77,7 @@ world 1, level 1; `Global.reset_values()`; creates a new `BattleSession` with a 
 round's; a test can script it with `seed_source`); resets `PipeCutscene.seen_cutscene`; sets `Level.first_load = true` (a win leaves no death to do it);
 `Global.death_load = false`; unpauses the tree; then transitions to 1-1. A fresh session means 35 alive contestants, tick 0, no events, no placements,
 no progress, 600 s each. The screen drops the old preview driver and clears every cell's live frame before the new session's tracks are built.
-A pause menu left open over the results is closed when the next round starts.
+
 
 ## 6. Results
 
@@ -119,6 +119,6 @@ Five consecutive rounds (alternating death and time out), compared at the same m
 ## 11. Decisions worth revisiting
 
 * Level music keeps playing through the pre-round (it lives in `AudioManager`, outside the frozen window).
-* The pause menu stays reachable during the pre-round and the results (so Quit is always reachable); the round timers keep counting while it is open.
+* The pause menu stays reachable during the pre-round and the results (so Quit is always reachable). While it is open the pre-round and the results timers (and the results' confirm) wait; closing it resumes them (added after review: `BattleRound.paused`, set from `Global.game_paused`). A death animation or a win hold is not paused.
 * The pre-round only happens for a round's first level, not for 1-1 → 1-2.
 * A win holds for 1.0 s; a death waits for its animation, with a 12 s safety net.

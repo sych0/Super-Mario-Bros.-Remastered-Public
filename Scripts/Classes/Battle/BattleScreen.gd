@@ -402,6 +402,7 @@ func _process(delta: float) -> void:
 	if OS.is_debug_build() and not _warned_root_camera and get_viewport().get_camera_2d() != null:
 		_warned_root_camera = true
 		push_warning("BattleScreen: a Camera2D became current in the root viewport; the game camera belongs in GameViewport")
+	battle_round.paused = Global.game_paused # the pause menu holds the pre-round and the results
 	battle_round.update(delta, _confirm_pressed() if battle_round.state == BattleRound.State.RESULTS else false)
 	_banner.text = battle_round.banner_text()
 	_banner.visible = _banner.text != ""
@@ -530,10 +531,6 @@ func _show_results() -> void:
 ## World 1-1 loaded into this same game window). The title is never involved.
 func _start_next_round() -> void:
 	_hide_result()
-	var hud := Global.get_node_or_null("GameHUD")
-	var pause_menu := hud.get_node_or_null("BattlePause") if hud != null else null
-	if pause_menu != null and pause_menu.visible:
-		pause_menu.close() # a pause menu left open over the results must not sit on top of the next round
 	_set_game_frozen(false)
 	for cell in cells:
 		cell.set_live(null, null) # the new session gets its own tracks

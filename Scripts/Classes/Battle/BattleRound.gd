@@ -16,7 +16,8 @@ extends RefCounted
 ##               its animation first (`death_finished()` ends it); a win holds for a moment.
 ## * RESULTS     the result card is up. Confirm (after a short lockout) or the timeout starts the
 ##               next round, never the title screen. Quit is not a state: it leaves Battle.
-## Timing here is real time (the screen's frame delta), not the Battle clock.
+## Timing here is real time (the screen's frame delta), not the Battle clock; the pre-round and the
+## results wait while the pause menu is open (`paused`).
 
 enum State {LOADING, PRE_ROUND, PLAYING, ROUND_OVER, RESULTS}
 enum End {NONE, DEATH, TIMEOUT, WIN}
@@ -42,6 +43,10 @@ var time_in_state := 0.0
 var pre_round_seconds := PRE_ROUND_SECONDS
 var history: Array[int] = [] ## every state entered, in order (for tests and debugging)
 var released_from_pre_round := false
+## True while the pause menu is open. The pre-round and the results do not run down while it is:
+## their timers (and the results' confirm) wait until it closes. Other states are unaffected (a
+## death animation or a win hold still plays out).
+var paused := false
 
 ## DEVELOPMENT ONLY (debug builds): `--battle-preround=SECONDS` (after `--`) or the
 ## SMB1R_BATTLE_PREROUND env var replaces the pre-round length; 0 skips the countdown.
@@ -96,6 +101,8 @@ func results_dismissed(confirm: bool) -> bool:
 ## Advances real time. `confirm` is "the player pressed jump / accept this frame". Returns true
 ## if the state changed.
 func update(delta: float, confirm := false) -> bool:
+	if paused and (state == State.PRE_ROUND or state == State.RESULTS):
+		return false
 	time_in_state += delta
 	match state:
 		State.PRE_ROUND:

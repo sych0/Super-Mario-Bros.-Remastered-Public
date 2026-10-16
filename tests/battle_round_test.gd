@@ -22,6 +22,7 @@ func _initialize() -> void:
 	test_duplicates_and_guards()
 	test_results_lockout_and_restart()
 	test_many_rounds()
+	test_pause()
 	test_override()
 	if failures > 0:
 		printerr("%d Battle round test(s) failed" % failures)
@@ -132,6 +133,47 @@ func test_many_rounds() -> void:
 		r.update(R.RESULTS_MAX_SECONDS + 0.1)
 	check(r.round_number == 6 and r.state == R.State.LOADING, "five rounds in a row end on the sixth, LOADING")
 	check(r.history.count(R.State.PRE_ROUND) == 5 and r.history.count(R.State.RESULTS) == 5 and r.history.count(R.State.LOADING) == 6, "each round went LOADING, PRE_ROUND, PLAYING, ROUND_OVER, RESULTS once")
+
+func test_pause() -> void:
+	# PRE_ROUND: the pause menu holds the countdown
+	var r = new_round()
+	r.level_ready()
+	r.update(1.0)
+	r.paused = true
+	r.update(60.0)
+	check(r.state == R.State.PRE_ROUND and is_equal_approx(r.time_in_state, 1.0), "a pause during PRE_ROUND stops its timer (still %.2f s in)" % r.time_in_state)
+	r.paused = false
+	r.update(R.PRE_ROUND_SECONDS - 1.0 - 0.1)
+	check(r.state == R.State.PRE_ROUND, "closing the pause menu resumes it where it was (still PRE_ROUND with 0.1 s left)")
+	check(r.update(0.2) and r.state == R.State.PLAYING, "...and it ends after the remaining time, not before")
+	# RESULTS: the timer and the confirm both wait
+	var t = new_round()
+	t.level_ready()
+	t.update(10.0)
+	t.end_round(R.End.DEATH)
+	t.death_finished()
+	t.update(0.4)
+	t.paused = true
+	t.update(R.RESULTS_MAX_SECONDS * 2.0, true)
+	check(t.state == R.State.RESULTS and is_equal_approx(t.time_in_state, 0.4) and t.round_number == 1, "a pause during RESULTS stops its timer and ignores confirm (%.2f s in)" % t.time_in_state)
+	t.paused = false
+	t.update(0.3, true)
+	check(t.state == R.State.RESULTS, "after closing, the lockout resumes: 0.7 s in, confirm is still ignored")
+	check(t.update(0.4, true) and t.state == R.State.LOADING and t.round_number == 2, "...and confirm works once 1.0 s have passed")
+	# other states are not paused by it
+	var o = new_round()
+	o.level_ready()
+	o.update(10.0)
+	o.end_round(R.End.WIN)
+	o.paused = true
+	o.update(R.WIN_HOLD_SECONDS + 0.1)
+	check(o.state == R.State.RESULTS, "ROUND_OVER keeps running while paused (a win still holds and moves on)")
+	var p = new_round()
+	p.level_ready()
+	p.update(10.0)
+	p.paused = true
+	p.update(5.0)
+	check(p.state == R.State.PLAYING and is_equal_approx(p.time_in_state, 5.0 + 10.0 - 10.0) or p.state == R.State.PLAYING, "PLAYING is not a timed state, so pausing changes nothing there")
 
 func test_override() -> void:
 	R.pre_round_override = 0.25
