@@ -218,32 +218,29 @@ func test_fallback() -> void:
 	var screen = Screen.new()
 	root.add_child(screen)
 	await frames(4)
-	# Run the match until some contestant's picture has left 1-1 (frame invalid): its cell must fall back cleanly.
-	var fallen := 0
-	for i in 400:
+	# A picture's frame goes invalid when it has no level to show (after the last course; a track with no stages: doc 55): its cell must
+	# fall back cleanly. A normal match never gets there (a clear moves a preview on to the next course), so one run is ended by hand.
+	for i in 30:
 		s.step()
 		screen.driver.update(0.0)
-		for c in screen.cells:
-			if not c.frame.valid:
-				fallen += 1
-		if fallen > 0:
-			break
+	screen.driver.tracks[1].frame.valid = false
+	screen.cells[0].queue_redraw()
 	await frames(3)
 	var fell = null # BattlePreviewCell (not named: a -s script is compiled before the autoloads exist)
 	for c in screen.cells:
 		if c.frame != null and not c.frame.valid:
 			fell = c
 			break
-	check(fell != null, "a contestant whose run ends has an invalid frame")
+	check(fell != null and fell.contestant_id == 1, "a contestant whose preview has no level to show has an invalid frame")
 	if fell != null:
-		check(not fell.is_live(), "an unsupported course is not drawn by the live renderer")
+		check(not fell.is_live(), "a cell with no level to show is not drawn by the live renderer")
 		var before: int = Cell.stat_placeholder_draws
 		fell.queue_redraw()
 		await frames(3)
 		check(Cell.stat_placeholder_draws > before, "...the placeholder renderer draws that cell instead")
 		check(screen.panes[fell.contestant_id - 1].cell == fell and screen.panes[fell.contestant_id - 1].region_px == Atlas.cell_rect(fell.contestant_id - 1), "...in the same atlas region, so the pane is unchanged")
 	var others = screen.cells.filter(func(c): return c.frame.valid)
-	check(others.size() == 0 or others.all(func(c): return c.is_live()), "every cell still on 1-1 stays live")
+	check(others.size() == 33 and others.all(func(c): return c.is_live()), "every other cell stays live (%d)" % others.size())
 	root.remove_child(screen)
 	screen.free()
 	S.clear()

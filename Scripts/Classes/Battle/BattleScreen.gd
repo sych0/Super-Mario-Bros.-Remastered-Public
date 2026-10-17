@@ -65,7 +65,7 @@ var game_scene: Node = null ## whatever currently runs inside GameViewport
 var atlas: BattlePreviewAtlas = null ## the one shared render target holding all 34 preview cells
 var cells: Array[BattlePreviewCell] = [] ## 187x240 pictures, in the atlas (index = contestant id - 1)
 var panes: Array[BattleOpponentPane] = [] ## 32x41 windows on the canvas, each showing its own atlas region
-var driver: BattlePreviewDriver = null ## drives the live previews (all 34 on World 1-1)
+var driver: BattlePreviewDriver = null ## drives the live previews (all 34, each on its own course)
 var attack_view: BattleAttackPresentation = null ## the visible side of this session's attack loop (a reader of its events; null when attacks are off)
 var attack_layer: BattleAttackLayer = null ## the thin red lines of attacks on the real player, over the canvas
 var incoming_strip: BattleIncomingStrip = null ## the real player's incoming enemies, in strip A
@@ -473,8 +473,8 @@ func _follow_game_camera() -> void:
 		audio_listener.global_position = camera.get_screen_center_position()
 
 ## Creates the preview driver for the current session (once). All 34 opponents get a track and
-## draw live while they are on World 1-1; a cell falls back to the placeholder on its own whenever
-## its frame is not valid (another course, or the run is over). If the level or its art can't be
+## draw live on whatever course they are on (a preview that clears its course moves on to the next one, doc 55); a cell falls back to
+## the placeholder on its own whenever its frame is not valid (only after the last course). If the first level or its art can't be
 ## built, nothing live is shown and every cell keeps the placeholder.
 func _ensure_driver() -> void:
 	if session == null or not live_previews or (driver != null and driver.session == session):
@@ -685,8 +685,11 @@ func _freeze_field() -> void:
 		return
 	refresh()
 	field_frozen = true
+	if driver != null:
+		driver.settle() # a preview caught in the dark between two courses is on the next one, never black (doc 55)
 	for cell in cells:
 		cell.freeze()
+		cell.queue_redraw()
 	for i in panes.size():
 		var c := session.contestants[i + 1]
 		if not c.alive and not panes[i].marked:

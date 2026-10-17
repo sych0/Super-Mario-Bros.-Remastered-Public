@@ -6,7 +6,7 @@ extends RefCounted
 ## own state, and everything the HUD shows from it, is never delayed.
 
 const LAG := 2.0
-const LIVE_COURSE := 0 ## only the first course (World 1-1) has a live preview; every other course uses the placeholder
+const FIRST_COURSE := 0 ## the course every preview starts on (World 1-1); a preview that clears its course moves on to the next (doc 55)
 const DEBUG_VIEW_ARG := "--battle-preview-debug"
 const DEBUG_VIEW_ENV := "SMB1R_BATTLE_PREVIEW_DEBUG"
 
@@ -28,28 +28,34 @@ static func _flag(arg: String, env: String) -> bool:
 
 var session: BattleSession = null
 var tracks := {} ## contestant id -> BattlePreviewTrack
-var sketch: BattleLevelSketch = null
+var sketch: BattleLevelSketch = null ## the first course's level (every preview starts there)
 var assets: BattlePreviewAssets = null
+var stages: BattlePreviewStages = null ## the level and art of every course a preview may move on to, built when first needed
 var update_us := 0 ## cost of the last update(), for measurements
 
 var _event_cursor := 0
 var _pushed_tick := -1
 
-## Null if the course's level or art cannot be built (everything then stays on the placeholder).
+## Null if the first course's level or art cannot be built (everything then stays on the placeholder). A later course whose level
+## cannot be built is shown by a stand-in (BattlePreviewStages), so a preview never ends in the placeholder.
 static func create(session_: BattleSession, ids: Array, logical_w: float) -> BattlePreviewDriver:
-	var sk := BattleLevelSketch.load_for(BattleCourse.scene_path(LIVE_COURSE))
-	if sk == null:
-		return null
-	var art := BattlePreviewAssets.build(sk)
-	if art == null:
+	var st := BattlePreviewStages.new()
+	var first := st.stage(FIRST_COURSE)
+	if first.is_empty():
 		return null
 	var d := BattlePreviewDriver.new()
 	d.session = session_
-	d.sketch = sk
-	d.assets = art
+	d.sketch = first.sketch
+	d.assets = first.assets
+	d.stages = st
 	var view_w := BattleMiniGameRenderer.world_width(logical_w)
 	for id in ids:
-		d.tracks[id] = BattlePreviewTrack.new(id, sk, art, session_.seed_value, view_w, LIVE_COURSE)
+		var course := session_.contestants[id].levels_cleared # (0 at the start of a match; a driver made mid-match starts where each opponent is)
+		var stage := st.stage(course)
+		if stage.is_empty():
+			stage = first
+			course = FIRST_COURSE
+		d.tracks[id] = BattlePreviewTrack.new(id, stage.sketch, stage.assets, session_.seed_value, view_w, course, st)
 	d._event_cursor = session_.events.size()
 	d._push()
 	return d
@@ -84,3 +90,11 @@ func _push() -> void:
 	for id in tracks:
 		var c := session.contestants[id]
 		tracks[id].push(session.tick_count, c.levels_cleared, c.progress, c.power, c.alive, by_id.get(id, []))
+		if c.alive and c.progress >= BattlePreviewStages.PREFETCH_PROGRESS and not stages.is_built(c.levels_cleared + 1):
+			stages.prefetch(c.levels_cleared + 1) # the next course's art is baked well before the picture needs it
+
+## Holds every picture at a state that can be shown at rest (the round is over): a pane caught in the dark between two courses is on the
+## next one. Nothing else changes, and the tracks are not stepped again.
+func settle() -> void:
+	for id in tracks:
+		tracks[id].settle()

@@ -268,12 +268,12 @@ func feed(seed_value: int, ticks: int, sub := 3):
 		for k in sub:
 			d.update(float(k) / sub)
 			var h: float = 28.0 if t.power > 0 else 14.0
-			if t.phase in [T.Phase.RUN, T.Phase.FLAG, T.Phase.WALK_OUT]:
-				if d.sketch.box_hits(t.x, t.y, h):
+			if t.phase in [T.Phase.RUN, T.Phase.FLAG, T.Phase.FADE]:
+				if t.sketch.box_hits(t.x, t.y, h):
 					log.solid += 1
-				if t.phase == T.Phase.RUN and d.sketch.is_pit_at(t.x) and t.jump.is_empty() and t.grounded:
+				if t.phase == T.Phase.RUN and t.sketch.is_pit_at(t.x) and t.jump.is_empty() and t.grounded:
 					log.pit += 1
-				if t.phase == T.Phase.RUN and t.x > d.sketch.goal_x - 7.0 + 0.01:
+				if t.phase == T.Phase.RUN and t.x > t.sketch.goal_x - 7.0 + 0.01:
 					log.goal += 1
 			log.frames.append(t.frame.signature())
 		for e in s.events:
@@ -311,20 +311,20 @@ func test_staging_and_invariants(sk) -> void:
 				late += 1
 		elif r.clear_tick >= 0:
 			clears += 1
-			if t.phase != T.Phase.DONE or t.frame.valid:
+			if t.course < 1 or not t.frame.valid or t.frame.displayed_course != t.course or t.phase == T.Phase.DONE:
 				clears_ok = false
 	check(kos > 10 and clears > 10, "the 80 seeds cover many KOs (%d) and clears (%d)" % [kos, clears])
 	check(solid == 0, "Mario's visual path never overlaps solid terrain (%d violations)" % solid)
 	check(pit == 0, "Mario is never standing or walking over a pit; only leaping or dying (%d violations)" % pit)
 	check(goal == 0, "Mario never passes the flagpole before the LEVEL_CLEAR (%d violations)" % goal)
 	check(kos_ok, "every authoritative KO ends in the KO phase with the overlay shown")
-	check(clears_ok, "every authoritative LEVEL_CLEAR plays out and ends the live preview")
+	check(clears_ok, "every authoritative LEVEL_CLEAR plays out and the preview carries on, live, on the next course (never a placeholder)")
 	check(late == 0, "KO animations finish within 6 s of the authoritative KO")
 
 	# a clear shows the flagpole slide: the frame passes through FLAG with the flag cloth moving
 	var r19 = feed(19, 200, 6)
 	var t19 = r19.track
-	check(t19.phase == T.Phase.DONE and t19.power == 1, "seed 19 clears 1-1, grows at the castle (power %d) and hands back to the placeholder" % t19.power)
+	check(t19.course >= 1 and t19.frame.valid and t19.frame.displayed_course == t19.course and t19.power >= 1, "seed 19 clears 1-1 and carries on, live, on a later course with the power the clear gave it (course %d, power %d)" % [t19.course, t19.power])
 	var saw_flag := false
 	var saw_cloth_move := false
 	var first_flag := ""
@@ -406,18 +406,18 @@ func test_coarse_updates() -> void:
 				for k in 4:
 					d.update(float(k) / 4.0)
 					var h: float = 28.0 if t.power > 0 else 14.0
-					if t.phase in [T.Phase.RUN, T.Phase.FLAG, T.Phase.WALK_OUT]:
-						if d.sketch.box_hits(t.x, t.y, h):
+					if t.phase in [T.Phase.RUN, T.Phase.FLAG, T.Phase.FADE]:
+						if t.sketch.box_hits(t.x, t.y, h):
 							solid += 1
-						if t.phase == T.Phase.RUN and d.sketch.is_pit_at(t.x) and t.jump.is_empty() and t.grounded:
+						if t.phase == T.Phase.RUN and t.sketch.is_pit_at(t.x) and t.jump.is_empty() and t.grounded:
 							pit += 1
-						if t.phase == T.Phase.RUN and t.x > d.sketch.goal_x - 7.0 + 0.01:
+						if t.phase == T.Phase.RUN and t.x > t.sketch.goal_x - 7.0 + 0.01:
 							goal += 1
-				if t.phase == T.Phase.KO or t.phase == T.Phase.DONE:
+				if t.phase == T.Phase.KO or t.course >= 1:
 					finished += 1
 					break
 	check(solid == 0 and pit == 0 and goal == 0, "invariants also hold when the preview is updated every 5 or 25 session seconds (snapping/resync)")
-	check(finished == total, "and every run still ends in KO or a clear (%d/%d)" % [finished, total])
+	check(finished == total, "and every run still ends in a KO or goes on to the next course after its clear (%d/%d)" % [finished, total])
 
 # ------------------------------------------------------------------ determinism of previews
 
@@ -453,9 +453,9 @@ func test_fallback_and_hud() -> void:
 	var s = S.new(3)
 	var d = D.create(s, [1], 188.0)
 	check(d.tracks.size() == 1 and not d.tracks.has(2), "only the requested opponent gets a track")
-	check(D.LIVE_COURSE == 0, "only course 0 (World 1-1) has a live preview")
+	check(D.FIRST_COURSE == 0, "every preview starts on course 0 (World 1-1)")
 	var r19 = feed(19, 200, 3)
-	check(not r19.track.frame.valid, "after the preview's level ends its frame is invalid, so the surface falls back")
+	check(r19.track.frame.valid and r19.track.course >= 1, "after a clear the preview's frame stays valid (it is on the next course), so the surface does not fall back to the placeholder")
 
 func test_hud_integration() -> void:
 	var G = root.get_node("Global")

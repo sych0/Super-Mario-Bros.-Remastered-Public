@@ -11,6 +11,12 @@ extends RefCounted
 ## the flagpole). There is no collision response, no player input and no pathfinding.
 ## It never writes anything back into the session and never touches the session's rng.
 ##
+## A level clear is not the end of the run. After the flagpole the picture holds for a moment, darkens in three steps and cuts to the
+## NEXT course's start (doc 55: measured on the reference at 60 fps: no castle walk, no card, no wipe): `enter_course` swaps in the next
+## course's level and art (BattlePreviewStages) and starts the run again, in the same frame object, so a cell keeps its binding. The course
+## it enters is the session's own next course (`levels_cleared`); a course whose level the sketch builder cannot read is shown by a stand-in
+## level, labelled with the real course. Only the end of the last course, or a track with no stages, still ends in DONE (the placeholder).
+##
 ## Incoming enemies (the visible side of an authoritative attack): an INCOMING_ACTIVATED event for
 ## this opponent makes a BattlePreviewInvader of the attack's kind at the edge of the view, ahead of
 ## Mario, when the picture's clock reaches the event's tick; the matching INCOMING_RESOLVED event
@@ -19,7 +25,7 @@ extends RefCounted
 ## authoritative events decide when one exists; the picture's own KO (`_end_ko`) and the level's end
 ## (`_grab_pole`) merely clear what is still on screen.
 
-enum Phase {RUN, DYING, FALLING, KO, FLAG, WALK_OUT, DONE}
+enum Phase {RUN, DYING, FALLING, KO, FLAG, FADE, DONE}
 enum EnemyState {WALK, STOMPED, SHELL, SLIDE}
 
 const STEP := 1.0 / 30.0
@@ -33,7 +39,10 @@ const ENEMY_SPEED := 28.0
 const KILL_Y := 80.0 ## below this a falling Mario is gone
 const FATAL_JUMP_SCALE := 0.55 ## a doomed pit jump covers this much of its distance
 const POLE_SLIDE_SPEED := 100.0
-const CASTLE_WALK_SPEED := 55.0
+const FLAG_HOLD := 0.27 ## seconds Mario stays at the pole's foot before the pane darkens (measured: 0.23-0.30)
+## How dark the pane is on each fade step. The reference fades in six 60 fps frames, 3 / 16 / 30 / 52 / 100 / 100 % black, and then
+## cuts to the next level; the track steps at 30 Hz, so each step here is the mean of a pair of those frames.
+const FADE_STEPS := [0.10, 0.41, 1.0]
 const INVADER_APPROACH := 44.0 ## px/s an incoming enemy closes in on Mario
 const INVADER_MARGIN := 14.0 ## it appears this far beyond the right edge of the view
 const INVADER_CLOSE := 36.0 ## where the first one settles ahead of Mario; each further one stands 24 px further out
@@ -44,7 +53,9 @@ const INVADER_HOP := 10.0 ## how high it floats while it crosses a pit
 const MAX_INVADERS := 8 ## three can be ACTIVE; the rest are ones still blinking out
 
 var id := 0
-var course := 0
+var course := 0 ## the real course this picture shows (the label); its level may be a stand-in's (`stage_geometry`)
+var stage_geometry := 0 ## the course whose level is drawn (= `course` unless it is shown by a stand-in)
+var stages: BattlePreviewStages = null ## where the next course's level comes from (null: a clear ends the run, as it did before doc 55)
 var sketch: BattleLevelSketch = null
 var assets: BattlePreviewAssets = null
 var frame := BattlePreviewFrame.new()
@@ -78,11 +89,12 @@ var invaders: Array[BattlePreviewInvader] = [] ## the pictures of this opponent'
 var steps_taken := 0
 
 var _inc_spawn: Array[Dictionary] = [] # INCOMING_ACTIVATED still to show: {tick, seq, kind}
+var _live_attacks := {} # seq -> kind of the attacks the picture has reached ACTIVATED for and not RESOLVED: shown again on a new course
 var _inc_end: Array[Dictionary] = [] # INCOMING_RESOLVED still to show: {tick, seq, cause}
 var _keys: Array[Dictionary] = []
 var _key_cursor := 0
 var _pending: Array[Dictionary] = [] # HIT / KO still to be staged
-var _clear := {} # {tick, power_to}
+var _clears := {} # course reached by the clear -> {tick, power_to}: every LEVEL_CLEAR still to be shown, as the session logged it
 var _loose_power: Array[Dictionary] = [] # POWER_UP not tied to a clear
 var _spawn_next := 0
 var _prev_tx := 0.0
@@ -91,12 +103,15 @@ var _stomp_dist := 36.0
 var _fall_vx := 0.0
 var _hopped := false
 var _slide_done_t := -1.0
-var _grew := false
 var _rng := RandomNumberGenerator.new()
+var _seed := 0
 
-func _init(id_: int, sketch_: BattleLevelSketch, assets_: BattlePreviewAssets, seed_value: int, view_w_: float, course_ := 0) -> void:
+func _init(id_: int, sketch_: BattleLevelSketch, assets_: BattlePreviewAssets, seed_value: int, view_w_: float, course_ := 0, stages_: BattlePreviewStages = null) -> void:
 	id = id_
 	course = course_
+	stage_geometry = course_
+	stages = stages_
+	_seed = seed_value
 	sketch = sketch_
 	assets = assets_
 	view_w = view_w_
@@ -132,12 +147,15 @@ func push(tick: int, course_: int, progress: float, power_: int, _alive: bool, e
 				var timed: bool = e.a != BattleSession.KoCause.HAZARD
 				_pending.append({"tick": float(e.tick), "kind": "ko_time" if timed else "ko_hazard", "planned": false})
 			BattleSession.EventType.LEVEL_CLEAR:
-				if e.a == course + 1:
-					_clear = {"tick": float(e.tick), "power_to": -1}
+				if int(e.a) > course:
+					_clears[int(e.a)] = {"tick": float(e.tick), "power_to": -1}
 			BattleSession.EventType.POWER_UP:
-				if not _clear.is_empty() and _clear.tick == float(e.tick):
-					_clear.power_to = e.a
-				else:
+				var with_clear := false
+				for reached in _clears:
+					if _clears[reached].tick == float(e.tick):
+						_clears[reached].power_to = e.a
+						with_clear = true
+				if not with_clear:
 					_loose_power.append({"tick": float(e.tick), "power_to": e.a})
 			BattleSession.EventType.INCOMING_ACTIVATED:
 				if phase != Phase.KO and phase != Phase.DONE:
@@ -147,6 +165,8 @@ func push(tick: int, course_: int, progress: float, power_: int, _alive: bool, e
 					_inc_end.append({"tick": float(e.tick), "seq": int(e.a), "cause": int(e.cause)})
 
 func _key_progress(k: Dictionary) -> float:
+	if k.course < course:
+		return 0.0 # a key from a course this picture has left: the next course starts from its beginning
 	return 1.0 if k.course > course else clampf(k.p, 0.0, 1.0)
 
 ## Authoritative progress at preview time `t` (linear between the session's 1 Hz keyframes).
@@ -202,8 +222,8 @@ func _step() -> void:
 			_step_falling()
 		Phase.FLAG:
 			_step_flag()
-		Phase.WALK_OUT:
-			_step_walk_out()
+		Phase.FADE:
+			_step_fade()
 	_update_camera()
 	_tick_invaders(running and phase == Phase.RUN)
 	_fill_frame()
@@ -229,8 +249,13 @@ func _step_run() -> void:
 
 # ---- Mario on the walk line
 
+## The clear of the course being shown (what opens the flagpole), or {}.
+func _clear() -> Dictionary:
+	return _clears.get(course + 1, {})
+
 func _gate_open() -> bool:
-	return not _clear.is_empty() and sim_t >= _clear.tick - 0.7
+	var c := _clear()
+	return not c.is_empty() and sim_t >= c.tick - 0.7
 
 func _step_ground() -> void:
 	var tx := target_x(sim_t)
@@ -257,6 +282,8 @@ func _step_ground() -> void:
 	if tx > x:
 		v = clampf(tspeed + FOLLOW_GAIN * (tx - x), 0.0, _vmax)
 	var nx := minf(x + v * STEP, limit)
+	if not grounded and sketch.box_hits(nx, y, BattleLevelSketch.BOX_H):
+		nx = x # walked off a ledge beside a wall (the end of a staircase): drops straight down instead of through it
 	speed = (nx - x) / STEP
 	var old_x := x
 	x = nx
@@ -591,39 +618,89 @@ func _step_flag() -> void:
 		_slide_done_t = phase_t
 	flag_y = minf(-151.0 + phase_t * 122.0, -29.0)
 	walk_phase += STEP * 6.0
-	if _slide_done_t >= 0.0 and phase_t >= _slide_done_t + 0.35:
-		phase = Phase.WALK_OUT
+	if _slide_done_t >= 0.0 and phase_t >= _slide_done_t + FLAG_HOLD:
+		phase = Phase.FADE
 		phase_t = 0.0
-		x = sketch.goal_x + 8.0
-		_grew = false
 
-func _step_walk_out() -> void:
+## The pane darkens in FADE_STEPS, one per step, and then cuts to the next course (no fade in: the reference shows the new level on the
+## frame after the last black one). With no next course to show the run ends dark.
+func _step_fade() -> void:
 	flag_y = -29.0
-	var want: int = _clear.get("power_to", -1)
-	if want >= 0 and not _grew:
-		_grew = true
-		_begin_transition(want)
-	if freeze_t > 0.0:
-		freeze_t -= STEP
-		pose = "Transition"
+	var k := roundi(phase_t / STEP)
+	if k <= FADE_STEPS.size():
+		fade = FADE_STEPS[k - 1]
 		return
-	if mario_hidden:
-		fade = minf(fade + STEP / 0.6, 1.0)
-		if fade >= 1.0:
-			phase = Phase.DONE
-			frame.valid = false
-		return
-	x += CASTLE_WALK_SPEED * STEP
-	var s := sketch.support_y(x, y, BattleLevelSketch.BOX_HALF_W)
-	if y < s - 0.5:
-		vy += GRAVITY * STEP
-		y = minf(y + vy * STEP, s)
-	else:
-		vy = 0.0
-	pose = "Move"
-	walk_phase += STEP * 9.0
-	if x >= sketch.castle_x:
-		mario_hidden = true # steps through the door
+	if not _enter_next_course():
+		fade = 1.0
+		phase = Phase.DONE
+		frame.valid = false
+
+## Starts the run again on the next course. False if there is no next course or no level to show for it.
+func _enter_next_course() -> bool:
+	if stages == null or course + 1 >= BattleCourse.COURSE_COUNT:
+		return false
+	var st := stages.stage(course + 1)
+	if st.is_empty():
+		return false
+	var want: int = _clear().get("power_to", -1)
+	if want >= 0:
+		power = want # grown (or kept) by the clear: the run starts with it
+	_clears.erase(course + 1)
+	enter_course(course + 1, st)
+	return true
+
+## Puts the picture on `st` (a BattlePreviewStages.stage): course `course_`'s level and art, Mario at its start, the camera at its left
+## edge, no enemy of the last level, nothing of its pole or fade. The frame object stays the same (a cell is bound to it). What the
+## session already said about this opponent (HIT / KO still to be shown, incoming attacks) is kept; how it will be shown is planned again
+## on the new level.
+func enter_course(course_: int, st: Dictionary) -> void:
+	course = course_
+	stage_geometry = st.geometry
+	sketch = st.sketch
+	assets = st.assets
+	frame.sketch = sketch
+	frame.assets = assets
+	_rng.seed = hash([_seed, id, course_])
+	_vmax = _rng.randf_range(92.0, 112.0)
+	_stomp_dist = _rng.randf_range(30.0, 42.0)
+	phase = Phase.RUN
+	phase_t = 0.0
+	fade = 0.0
+	flag_y = -151.0
+	mario_hidden = false
+	freeze_t = 0.0
+	blink_t = 0.0
+	pose = "Idle"
+	speed = 0.0
+	walk_phase = 0.0
+	jump = {}
+	jump_idx = 0
+	vy = 0.0
+	grounded = true
+	enemies.clear()
+	_spawn_next = 0
+	_slide_done_t = -1.0
+	_hopped = false
+	x = sketch.start_x
+	y = sketch.ground_y_at(x)
+	_prev_tx = x
+	camera_x = _cam_min()
+	for d in _pending:
+		d.planned = false
+		d.erase("fatal_jump")
+		d.erase("instant")
+	invaders.clear() # (the last level's were blinked out at the flagpole)
+	for seq in _live_attacks: # an attack that is still ACTIVE on this opponent is still in its world: its enemy is on the new course too
+		_spawn_invader(seq, _live_attacks[seq])
+	_fill_frame()
+
+## Holds the picture at a state that can be shown at rest (the round is over): a pane caught mid-fade is on the next course, not black.
+func settle() -> void:
+	if phase == Phase.FADE and not _enter_next_course():
+		fade = 1.0
+		phase = Phase.DONE
+		frame.valid = false
+	_fill_frame()
 
 # ---- incoming enemies (authoritative attacks, shown)
 
@@ -636,10 +713,12 @@ func _tick_invaders(moving: bool) -> void:
 		return
 	while not _inc_spawn.is_empty() and _inc_spawn[0].tick <= sim_t:
 		var s: Dictionary = _inc_spawn.pop_front()
+		_live_attacks[s.seq] = s.kind
 		if phase == Phase.RUN or phase == Phase.DYING or phase == Phase.FALLING: # nothing arrives at the flagpole
 			_spawn_invader(s.seq, s.kind)
 	while not _inc_end.is_empty() and _inc_end[0].tick <= sim_t:
 		var r: Dictionary = _inc_end.pop_front()
+		_live_attacks.erase(r.seq)
 		var inv := invader_for(r.seq)
 		if inv != null:
 			_begin_vanish(inv, r.cause)
@@ -720,6 +799,7 @@ func _clear_invaders() -> void:
 	invaders.clear()
 	_inc_spawn.clear()
 	_inc_end.clear()
+	_live_attacks.clear()
 
 # ---- placement helpers
 
@@ -762,7 +842,7 @@ func _safe_column(px: float) -> bool:
 func _update_camera() -> void:
 	var want := x - CAMERA_FOCUS * view_w
 	want = clampf(want, _cam_min(), maxf(_cam_min(), _cam_max() - view_w))
-	if phase == Phase.RUN or phase == Phase.FLAG or phase == Phase.WALK_OUT:
+	if phase == Phase.RUN or phase == Phase.FLAG or phase == Phase.FADE:
 		camera_x = maxf(camera_x, want) # SMB1 never scrolls back
 
 # ---------------------------------------------------------------- output
