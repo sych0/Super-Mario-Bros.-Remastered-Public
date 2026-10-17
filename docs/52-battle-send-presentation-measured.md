@@ -6,6 +6,8 @@ limitation that blocked doc 51 did not apply here) and used it directly, frame b
 measurements (10 fps) are kept as context; this document corrects the one place direct 60 fps inspection showed
 something different.
 
+> **Corrected by [doc 54](54-battle-presentation-measured-from-video.md)**: the "hold ~0.18 s at the window then snap" finding of section 1 was a misreading of coarse contact sheets. At 60 fps (53 of 53 flights) the bracket starts at exactly (240.0, 120.0) and moves in a straight line at **constant speed** for **15 frames = 0.25 s** to the pane's centre. The WATCH OUT! "pulse" of section 2 is a white flash that repeats every 59 frames (doc 54 section 4), and the endpoint of the lines is the pill, not the bar's left end.
+
 ## 0. Scope
 
 This is a presentation-only pass on top of doc 51's architecture (`BattleSendStyle`, `BattleAttackFlight`,

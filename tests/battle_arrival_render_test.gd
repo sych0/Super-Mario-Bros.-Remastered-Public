@@ -7,8 +7,8 @@ extends SceneTree
 ##   - the pictures differ only in a ring around the enemy while the effect runs, and the effect is really drawn there
 ##     (white corner brackets); nothing else in the window differs
 ##   - once the effect has ended the whole area around the enemy is identical: it looks completely normal
-## and the real incoming strip, drawn on the real canvas, uses a different colour for each phase (in transit, queued,
-## arriving, in level), flashes as an enemy appears, and fades a defeated attack's icon green where it was.
+## and the real incoming strip, drawn on the real canvas, shows bare enemy sprites that travel left, wait at the gold boundary,
+## and are gone (no marker, no flash, no fading ghost) when their enemy appears in the level (doc 54).
 ##
 ##   xvfb-run -a -s "-screen 0 2400x1300x24" godot --path . --rendering-driver opengl3 \
 ##     --rendering-method gl_compatibility --resolution 1920x1080 --fixed-fps 60 \
@@ -311,48 +311,75 @@ func slot_color(img: Image, slot: int, dx := -3.4, dy := 2.4) -> Color:
 	var strip_rect: Rect2 = current_scene.layout.strip_a
 	return canvas_color(img, int(floorf(strip_rect.position.x + xs[slot] + dx)), int(floorf(strip_rect.position.y + dy)))
 
+## The bar's zone colour at the bar-local x `x`.
+func zone_at(x: float) -> Color:
+	var bar = current_scene.incoming_strip
+	if x < bar.gold_end(bar.size.x):
+		return STRIP.ZONE_GOLD
+	if x < bar.orange_end(bar.size.x):
+		return STRIP.ZONE_ORANGE
+	return STRIP.ZONE_DARK
+
+## Whether slot `slot`'s little sprite is on the bar: some pixel of its 8 x 8 box differs clearly from the zone colour under it.
+func icon_on_bar(img: Image, slot: int) -> bool:
+	var bar = current_scene.incoming_strip
+	var xs: PackedFloat32Array = bar.place_all(bar.items, bar.size.x)
+	var strip_rect: Rect2 = current_scene.layout.strip_a
+	var zone := zone_at(xs[slot])
+	for dy in range(2, 11, 2):
+		for dx in range(-3, 4, 2):
+			if not near(canvas_color(img, int(floorf(strip_rect.position.x + xs[slot] + dx)), int(floorf(strip_rect.position.y + dy))), zone, 0.15):
+				return true
+	return false
+
+## Whether the gold zone just left of the boundary is clean (nothing of an icon is there).
+func gold_clean(img: Image) -> bool:
+	var bar = current_scene.incoming_strip
+	var strip_rect: Rect2 = current_scene.layout.strip_a
+	var bx: float = strip_rect.position.x + bar.gold_end(bar.size.x)
+	for dx in range(-14, -5, 2):
+		for dy in range(3, 10, 2):
+			if not near(canvas_color(img, int(floorf(bx + dx)), int(floorf(strip_rect.position.y + dy))), STRIP.ZONE_GOLD, 0.1):
+				return false
+	return true
+
 func test_strip_colours() -> void:
-	print("-- the strip, drawn: one colour per phase")
+	print("-- the strip, drawn: bare icons that travel, wait, and leave when their enemy appears (doc 54)")
 	await drain()
 	var atks := []
 	for i in 5:
 		atks.append(session.report_enemy_defeat(alive_bot(i), KIND.GOOMBA if i % 2 == 0 else KIND.KOOPA))
 	await frames(8)
-	var img := await screen_image("strip_1_in_transit")
-	var corner_dot := slot_color(img, 0, -4.0, 1.0)
-	var transit_ok := true
+	var img := await screen_image("strip_1_just_sent")
+	var bar = current_scene.incoming_strip
+	var drawn := 0
+	var plated := 0
 	for i in 5:
-		transit_ok = transit_ok and near(slot_color(img, i), STRIP.ZONE_DARK, 0.1) # (all five wait at the bar's right end, in its darkest zone)
-	check(transit_ok, "in transit: the icons are hollow (the bar's own colour inside, not the queued brown) (%s)" % [slot_color(img, 0)])
-	check(luma(corner_dot) > luma(slot_color(img, 0)) + 0.08, "...with a dotted outline (the corner dot is lighter: %s)" % [corner_dot])
-	await frames(75) # the lines have landed and the 'new' outlines have faded
-	img = await screen_image("strip_2_queued")
-	var queued_ok := true
-	for i in 5:
-		queued_ok = queued_ok and near(slot_color(img, i), STRIP.QUEUED_FILL, 0.08)
-	check(queued_ok, "queued: five dim brown icons (%s)" % [slot_color(img, 0)])
-	# the three ACTIVE ones appear one second apart: the first at once, the second a second later, the third a second after that
-	await wait_until(func(): return atks[0].spawned_tick >= 0, 60 * 8)
-	await frames(3)
-	img = await screen_image("strip_3_just_appeared")
-	var flash_c := slot_color(img, 0)
+		if icon_on_bar(img, i):
+			drawn += 1
+		if not near(slot_color(img, i, -5.6, 4.0), STRIP.ZONE_DARK, 0.1):
+			plated += 1
+	check(drawn == 5 and plated == 0, "just sent: five sprites at the bar's right end, bare: no plate or outline in the bar's own dark orange (%d drawn, %d plated)" % [drawn, plated])
 	await frames(75)
+	img = await screen_image("strip_2_travelling")
+	var xs_now: PackedFloat32Array = bar.place_all(bar.items, bar.size.x)
+	check(xs_now[0] < bar.entry_x(bar.size.x) - 20.0 and icon_on_bar(img, 0), "a second and a quarter later they are well on their way, still bare sprites")
+	# the first enemy appears in the level: its icon runs on across the boundary and is gone, leaving nothing in the gold zone
+	await wait_until(func(): return atks[0].spawned_tick >= 0, 60 * 8)
+	await frames(60)
+	img = await screen_image("strip_3_released")
+	check(atks[0].spawned_tick >= 0 and gold_clean(img), "when its enemy is in the level the icon has crossed the boundary and is gone: no marker, no flash left in the gold zone")
+	await wait_until(func(): return atks[1].spawned_tick >= 0, 60 * 8)
+	await frames(30) # (the third appears a second after the second)
 	img = await screen_image("strip_4_phases")
-	check(atks[0].spawned_tick >= 0 and atks[1].spawned_tick >= 0 and atks[2].spawned_tick < 0, "(the first two enemies are in the level, the third is still arriving)")
-	var steady_in_level := slot_color(img, 0)
-	check(near(steady_in_level, STRIP.IN_LEVEL_FILL, 0.1), "in the level: a saturated red icon (%s)" % [steady_in_level])
-	check(luma(flash_c) > luma(steady_in_level) + 0.15, "...that flashed white when its enemy appeared (%.2f against %.2f steady)" % [luma(flash_c), luma(steady_in_level)])
-	var arriving_color := slot_color(img, 2)
-	check(near(arriving_color, STRIP.ARRIVING_FILL, 0.1), "arriving (ACTIVE, no enemy yet): an amber icon (%s)" % [arriving_color])
-	check(near(slot_color(img, 3), STRIP.QUEUED_FILL, 0.08) and near(slot_color(img, 4), STRIP.QUEUED_FILL, 0.08), "queued behind them: still dim brown")
-	check(not near(steady_in_level, arriving_color, 0.15) and not near(arriving_color, STRIP.QUEUED_FILL, 0.15), "the three phases are three clearly different colours")
-	# the player defeats the first one: its icon turns green where it was, then the others close up
+	check(atks[0].spawned_tick >= 0 and atks[1].spawned_tick >= 0 and atks[2].spawned_tick < 0 and gold_clean(img), "(the first two enemies are in the level, the third is still arriving) and the gold zone is still clean")
+	check(icon_on_bar(img, 2) and icon_on_bar(img, 3), "the ones still arriving and queued are on the bar")
+	# the player defeats the first one: nothing is drawn for it (no green fade)
 	node_for(atks[0].seq).stomped_on(player())
 	await frames(6)
 	img = await screen_image("strip_5_defeated")
-	var ghost := slot_color(img, 0)
-	check(ghost.g > ghost.r + 0.1 and ghost.g > ghost.b, "defeated: its icon fades green in its own slot (%s)" % [ghost])
+	check(gold_clean(img), "defeated: no icon fades green in the gold zone (the reference's icon was gone when its enemy appeared)")
 	await frames(45)
 	img = await screen_image("strip_6_after")
-	check(near(slot_color(img, 0), STRIP.IN_LEVEL_FILL, 0.1) or near(slot_color(img, 0), STRIP.ARRIVING_FILL, 0.1), "half a second later the fade is over and the strip has closed up (%s)" % [slot_color(img, 0)])
+	check(gold_clean(img) and icon_on_bar(img, 1), "half a second later the strip is as it was (%s)" % [slot_color(img, 1)])
 	await drain()

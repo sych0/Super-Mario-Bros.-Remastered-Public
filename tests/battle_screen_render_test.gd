@@ -15,8 +15,8 @@ const LEVEL_1_1 := "res://Scenes/Levels/SMB1/World1/1-1.tscn"
 const GOOMBA := "res://Scenes/Prefabs/Entities/Enemies/Goomba.tscn"
 
 ## Strip A is the incoming bar (doc 47 B35-INCOMING-001): gold on the left third, then orange, then darker orange.
-var ZONE_GOLD := Color8(255, 208, 48)
-var ZONE_ORANGE := Color8(255, 150, 28)
+var ZONE_GOLD := Color8(255, 189, 9) # the incoming bar's measured zone colours (doc 54)
+var ZONE_ORANGE := Color8(255, 118, 0)
 
 var failures := 0
 var args := {}
@@ -157,7 +157,7 @@ func _run() -> void:
 			if is_sky(px(img, x, y)):
 				sky_outside += 1
 	check(sky_outside == 0, "no level sky anywhere around the window (%d sampled pixels)" % sky_outside)
-	# (the eye counter sits at strip B's left end and WATCH OUT! in its middle, so its gold is sampled between them and at the right)
+	# (WATCH OUT! sits in strip B's middle only while an opponent aims at the player, so its gold is sampled left and right of it)
 	check(near(px(img, 240, 242), ZONE_ORANGE, tol8) and near(px(img, 150, 242), ZONE_GOLD, tol8) and near(px(img, 160, 255), BS.STRIP_B_COLOR, tol8) and near(px(img, 362, 255), BS.STRIP_B_COLOR, tol8),
 		"the two strips sit under the window: the incoming bar's gold and orange zones, and the status strip's gold")
 	var strip_a_dark: Color = px(img, 340, 242)
@@ -287,23 +287,30 @@ func _run() -> void:
 	var shot: Image = await grab("battle_ui_reticle")
 	check(ret.visible and ret.target >= 1, "the reticle is on the player's target pane")
 	var tr: Rect2 = scr.layout.slots[ret.target - 1]
+	var RETC = load("res://Scripts/Classes/Battle/BattleTargetReticle.gd")
+	var GEOC = load("res://Scripts/Classes/Battle/BattleAttackGeometry.gd")
 	var corners_red := 0
-	for c in [Vector2(-0.875, -0.875), Vector2(tr.size.x + 0.875, -0.875), Vector2(-0.875, tr.size.y + 0.875), Vector2(tr.size.x + 0.875, tr.size.y + 0.875)]:
-		var col: Color = dev(shot, tr.position.x + c.x, tr.position.y + c.y)
-		if col.r > 0.88 and col.g < 0.2 and col.b < 0.28:
+	var centers: Array[Vector2] = RETC.arm_centers(GEOC.rest_box(tr))
+	for k in 4:
+		var c1: Color = dev(shot, centers[2 * k].x, centers[2 * k].y)
+		var c2: Color = dev(shot, centers[2 * k + 1].x, centers[2 * k + 1].y)
+		if c1.r > 0.88 and c1.g < 0.2 and c1.b < 0.28 and c2.r > 0.88 and c2.g < 0.2 and c2.b < 0.28:
 			corners_red += 1
-	check(corners_red == 4, "red (r>225, g<50, b<70) at all four corners of the target pane (%d of 4)" % corners_red)
+	check(corners_red == 4, "red (r>225, g<50, b<70) on both arms of all four corners of the target pane's bracket, inside its pane (%d of 4)" % corners_red)
 	var other_red := 0
 	for i in scr.layout.slots.size():
 		if i + 1 == ret.target:
 			continue
-		var r: Rect2 = scr.layout.slots[i]
-		if absf(r.position.x - tr.position.x) < 40.0 and absf(r.position.y - tr.position.y) < 50.0:
-			continue # a neighbour's corner sample is inside the target's own bracket (the bracket fills the gap between panes)
-		var col: Color = dev(shot, r.position.x - 0.875, r.position.y - 0.875)
-		if col.r > 0.88 and col.g < 0.2 and col.b < 0.28:
+		var ocs: Array[Vector2] = RETC.arm_centers(GEOC.rest_box(scr.layout.slots[i]))
+		var whole := 0
+		for k in 4:
+			var d1: Color = dev(shot, ocs[2 * k].x, ocs[2 * k].y)
+			var d2: Color = dev(shot, ocs[2 * k + 1].x, ocs[2 * k + 1].y)
+			if d1.r > 0.88 and d1.g < 0.2 and d1.b < 0.28 and d2.r > 0.88 and d2.g < 0.2 and d2.b < 0.28:
+				whole += 1
+		if whole == 4:
 			other_red += 1
-	check(other_red == 0, "and at no other pane's corner (%d)" % other_red)
+	check(other_red == 0, "and no other pane has a whole bracket (%d)" % other_red)
 	var Mode = load("res://Scripts/Classes/Battle/BattleTargeting.gd").Mode
 	scr.select_target_mode(Mode.LOWEST_TIME)
 	await frames(12)
@@ -326,7 +333,7 @@ func _run() -> void:
 	var card_shot: Image = await grab("battle_ui_ko_card")
 	var vr: Rect2 = scr.layout.slots[victim - 1]
 	var blue: Color = px(card_shot, vr.position.x + 3.0, vr.position.y + 16.0)
-	check(blue.b > 0.65 and blue.r < 0.35 and blue.g < 0.55, "the KO card is blue (%s)" % blue.to_html(false))
+	check(blue.b > 0.5 and blue.r < 0.3 and blue.g < 0.5, "the KO card is blue: its ring and field (%s)" % blue.to_html(false))
 	check(ko_pane.position == vr.position and ko_pane.size == vr.size and ko_pane.placement == sess.contestants[victim].placement and ko_pane.placement > 1, "it never moved and carries the contestant's placement (%d)" % ko_pane.placement)
 
 	# -- leave Battle ----------------------------------------------------------------------------------------------

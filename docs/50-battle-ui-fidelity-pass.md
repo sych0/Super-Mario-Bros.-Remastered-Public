@@ -4,6 +4,8 @@ Status: implemented on top of `5325bd7` (M-T1, doc 49). Doc 47 is the authority 
 This pass changes **how Battle looks and answers input, never what it does**: no attack rule, spawn rule, targeting rule, timer, coin, item, bot, round-outcome or level-progression behaviour was touched (section 8 lists what was verified unchanged).
 Zack's physical comparison against the video is the final gate; section 12 is the list to compare.
 
+> **Superseded in part by [doc 54](54-battle-presentation-measured-from-video.md)** (measured at 60 fps from the public video): the reticle's look (thick rounded corners **inside** the pane, an idle pulse, no punch), the incoming bar (colours, boundaries, bare sprites, no gold-zone marker), the WATCH OUT! pill (black plate, layered ends, a repeating white flash) and the KO card (the 0.95 s timeline, the card's palette) are now as the video shows them; the **eye counter was removed** (the frames refute "attackers' count").
+
 ## 0. How the brief and doc 47 were reconciled
 
 | Brief item | Doc 47 ids | Done? | Basis and limits |

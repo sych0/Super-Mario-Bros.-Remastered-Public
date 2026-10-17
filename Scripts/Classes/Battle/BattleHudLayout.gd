@@ -23,6 +23,7 @@ const GAME_RECT := Rect2(112, 8, 256, 224) ## the visible window (B35-LAYOUT-001
 const FRAME_RECT := Rect2(108, 0, 264, 268) ## the gold frame around the window and the two strips
 const STRIP_A := Rect2(111.5, 236, 257, 12) ## the incoming bar (B35-LAYOUT-003)
 const STRIP_B := Rect2(111.5, 249, 257, 13) ## the status strip
+const PILL := Rect2(189.5, 248.75, 101, 13) ## the WATCH OUT! pill, measured on the reference at 60 fps (doc 54): it sits in the status strip and the thin attacker lines end on its left / right outer edge
 const PANEL_W := 108.0 ## the left panel is x 0..108, the right one x 372..480
 const OPPONENTS := 34
 const SLOTS_PER_SIDE := 17
@@ -55,7 +56,7 @@ const FRAME_DARK := Color8(255, 182, 0)
 const OUTLINE := Color8(59, 51, 33) ## the thin dark line just outside the window, and the strips' borders
 const OUTLINE_WIDTH := 0.5
 
-## Returns {canvas, game, game_size, game_crop, frame, frame_inner, strip_a, strip_b, left, right, slots[34], cell, top,
+## Returns {canvas, game, game_size, game_crop, frame, frame_inner, strip_a, strip_b, pill, left, right, slots[34], cell, top,
 ## badge_left, badge_right, hud}. `slots[i]` is the preview rect for contestant i + 1 (1..17 left panel, 18..34 right).
 ## `hud` holds the in-window element rects (`coins`, `item_box`, `timer`, `selector`: {lowest_time, random, most_coins,
 ## attackers, center, cross}).
@@ -77,7 +78,7 @@ static func compute() -> Dictionary:
 	return {
 		"canvas": CANVAS, "game": GAME_RECT, "game_size": GAME_SIZE, "game_crop": Vector2(0, GAME_CROP_TOP),
 		"frame": FRAME_RECT, "frame_inner": FRAME_RECT.grow(-2.0),
-		"strip_a": STRIP_A, "strip_b": STRIP_B,
+		"strip_a": STRIP_A, "strip_b": STRIP_B, "pill": PILL,
 		"left": left, "right": right, "slots": slots, "cell": CELL, "top": GRID_TOP,
 		"badge_left": BADGE_LEFT, "badge_right": BADGE_RIGHT,
 		"hud": {

@@ -231,14 +231,12 @@ func _run() -> void:
 func is_reticle_red(c: Color) -> bool:
 	return c.r > 225.0 / 255.0 and c.g < 50.0 / 255.0 and c.b < 70.0 / 255.0
 
-## How many of the four corner brackets of pane `id` are pure red at their arm's middle.
+## How many of the four corner brackets of pane `id` have both arms red at their middle (the rest box: the persistent bracket inside the pane).
 func red_corners(img: Image, layout: Dictionary, id: int) -> int:
+	var centers: Array[Vector2] = load("res://Scripts/Classes/Battle/BattleTargetReticle.gd").arm_centers(GEO.rest_box(layout.slots[id - 1]))
 	var n := 0
-	var rects: Array[Rect2] = load("res://Scripts/Classes/Battle/BattleTargetReticle.gd").corner_rects(layout.slots[id - 1])
-	for i in range(0, rects.size(), 2): # one horizontal arm per corner (0, 2, 4, 6)
-		var r: Rect2 = rects[i]
-		# (px() samples the centre of whole logical pixel (x, y): ask for the arm's own centre)
-		if is_reticle_red(px(img, r.position.x + r.size.x * 0.5 - 0.5, r.position.y + r.size.y * 0.5 - 0.5)):
+	for k in 4:
+		if red_near(img, centers[2 * k].x, centers[2 * k].y) and red_near(img, centers[2 * k + 1].x, centers[2 * k + 1].y):
 			n += 1
 	return n
 
@@ -253,20 +251,19 @@ func red_near(img: Image, x: float, y: float) -> bool:
 				return true
 	return false
 
-## How many of the four corner brackets round `pane` (any rectangle: a pane, or the reticle in flight) are drawn: the arm's own middle.
-func red_corners_of_rect(img: Image, pane: Rect2, alpha_ok := false) -> int:
+## How many of the four corner brackets of a bracket whose OUTER box is `box` (the reticle in flight, or at rest) have both arms red at their middle.
+func red_corners_of_box(img: Image, box: Rect2) -> int:
+	var centers: Array[Vector2] = load("res://Scripts/Classes/Battle/BattleTargetReticle.gd").arm_centers(box)
 	var n := 0
-	var rects: Array[Rect2] = load("res://Scripts/Classes/Battle/BattleTargetReticle.gd").corner_rects(pane)
-	for i in range(0, rects.size(), 2):
-		var r: Rect2 = rects[i]
-		if red_near(img, r.position.x + r.size.x * 0.5, r.position.y + r.size.y * 0.5):
+	for k in 4:
+		if red_near(img, centers[2 * k].x, centers[2 * k].y) and red_near(img, centers[2 * k + 1].x, centers[2 * k + 1].y):
 			n += 1
 	return n
 
 func test_target_reticle(layout: Dictionary) -> void:
 	print("-- the target reticle")
 	var t: int = session.target_of(0)
-	await frames(24) # (the reticle punches for 0.3 s when it lands: the corner samples are of the settled bracket)
+	await frames(24)
 	var img := await grab("target_00_reticle")
 	check(t >= 1 and red_corners(img, layout, t) == 4, "the player's target pane (#%d) has a red bracket at all four corners" % t)
 	var others_red := 0
@@ -280,7 +277,7 @@ func test_target_reticle(layout: Dictionary) -> void:
 			others_full += 1
 	check(others_full == 0, "no other pane has all four")
 	var rect: Rect2 = layout.slots[t - 1]
-	check(not is_reticle_red(px(img, rect.position.x + 1.5, rect.position.y + 1.5)), "the bracket is outside the pane, in the gap: the picture is not covered")
+	check(is_reticle_red(px(img, rect.position.x + 3.0, rect.position.y + 3.0)) and not is_reticle_red(px(img, rect.get_center().x, rect.get_center().y)), "the bracket is inside the pane (thick corners over the picture's corners) and open in the middle (doc 54)")
 	# it follows the player's mode (the times are equal, so one lower time decides)
 	var equal_time: int = session.get_player().time_left
 	var low := alive_between(18, 34, 3)
@@ -316,33 +313,46 @@ func test_target_reticle_ko(layout: Dictionary) -> void:
 	check(shown == 1, "exactly one pane has a whole bracket")
 
 func test_player_send(layout: Dictionary, game: Rect2) -> void:
-	print("-- the real player's send: the reticle holds at the window, then snaps to the pane")
+	print("-- the real player's send: the bracket flies in a straight line at constant speed from the window's middle (doc 54)")
 	await wait_lines_gone()
 	await frames(30)
 	var base := await grab("attack_00_baseline")
 	var target := alive_between(18, 34, 2)
 	fixed_target(target)
 	var old_target: int = session.target_of(0)
-	var a = session.report_enemy_defeat(0, KIND.GOOMBA)
-	# early: still inside BattleSendStyle.HOLD_SECONDS, so the bracket sits at the window's middle, not moving yet
-	var flew: bool = await wait_flight(a.seq, 0.2)
-	var img := await grab("attack_01_player_send")
 	var view = screen.attack_view
 	var ret = screen.target_reticle
-	var f = view.flight_of(a.seq)
-	check(flew and f != null and f.target == target and ret.flying.size() == 1 and ret.flying[0].target == target, "the reticle is in the air towards the authoritative recipient (#%d)" % target)
-	var early_progress: float = float(ret.flying[0].progress)
-	check(early_progress == 0.0, "within BattleSendStyle.HOLD_SECONDS it has not started moving yet (doc 52: no glide, the reference holds it in the window)")
-	var window_rect: Rect2 = GEO.send_rect(layout, target, 0.0)
 	var pane: Rect2 = layout.slots[target - 1]
-	check(red_corners_of_rect(img, window_rect) >= 3, "its bracket is drawn at the window's middle while it holds there (%d of 4 corners red)" % red_corners_of_rect(img, window_rect))
-	check(red_corners_of_rect(img, pane) < 4 and red_corners_of_rect(img, layout.slots[old_target - 1]) < 4, "neither the old target's pane nor the recipient's carries the persistent bracket (it is the one in the air)")
-	check(changed_fraction(img, base, pane.grow(-2.0)) < 0.25, "the recipient pane is not tinted (%.0f %% of its pixels changed)" % [changed_fraction(img, base, pane.grow(-2.0)) * 100.0])
-	# late: past the hold, it has snapped most of the way onto the recipient's pane (doc 52: the crossing itself is 1-2 frames)
-	var flew_late: bool = await wait_flight(a.seq, 0.95)
-	var img_late := await grab("attack_01c_player_send_snapping")
-	var late_progress: float = float(ret.flying[0].progress) if ret.flying.size() == 1 else 1.0
-	check(flew_late and late_progress > early_progress, "past the hold the bracket is snapping onto the recipient's pane (%.2f)" % late_progress)
+	# hold the clock and step the flight by hand: each picture is of an exact moment (15 frames = 0.25 s)
+	screen.game_frozen = true
+	var a = session.report_enemy_defeat(0, KIND.GOOMBA)
+	view.update(0.0)
+	screen.refresh()
+	var f = view.flight_of(a.seq)
+	check(f != null and f.target == target and ret.flying.size() == 1 and ret.flying[0].target == target and not ret.persistent_visible(), "the reticle is in the air towards the authoritative recipient (#%d)" % target)
+	var seen_dx := []
+	var moments := [0.0, 5.0 / 15.0, 10.0 / 15.0, 14.0 / 15.0]
+	var prev_center := Vector2.ZERO
+	var prev_step := Vector2.ZERO
+	var linear := true
+	var at_window := 0
+	var imgs := []
+	var elapsed := 0.0
+	for m in moments:
+		view.update(m * F_SECONDS() - elapsed)
+		elapsed = m * F_SECONDS()
+		screen.refresh()
+		var shot := await grab("attack_01_player_send_%02d" % int(m * 15.0))
+		imgs.append(shot)
+		var prog: float = float(ret.flying[0].progress) if ret.flying.size() == 1 else 1.0
+		var box: Rect2 = GEO.send_rect(layout, target, prog)
+		var corners := red_corners_of_box(shot, box)
+		check(corners >= 3, "at frame %d of 15 its bracket is drawn where the flight says: centre (%.1f, %.1f), %d of 4 corners red" % [int(round(m * 15.0)), box.get_center().x, box.get_center().y, corners])
+		if m == 0.0 and box.get_center().is_equal_approx(game.get_center()):
+			at_window += 1
+	check(at_window == 1, "frame 0 is at the window's middle (240, 120)")
+	check(red_corners_of_box(imgs[0], GEO.rest_box(pane)) < 4 and red_corners_of_box(imgs[0], GEO.rest_box(layout.slots[old_target - 1])) < 4, "neither the old target's pane nor the recipient's carries the persistent bracket while it flies (it is the one in the air)")
+	check(changed_fraction(imgs[1], base, pane.grow(-2.0)) < 0.25, "the recipient pane is not tinted (%.0f %% of its pixels changed)" % [changed_fraction(imgs[1], base, pane.grow(-2.0)) * 100.0])
 	# no gold line, no enemy riding it, no frame flash
 	var from: Vector2 = GEO.send_start(layout)
 	var to: Vector2 = pane.get_center()
@@ -350,25 +360,41 @@ func test_player_send(layout: Dictionary, game: Rect2) -> void:
 	for k in range(1, 9):
 		var p := from.lerp(to, 0.1 * k)
 		var behind: Vector2 = p.lerp(from, 0.5)
-		if px(img_late, behind.x, behind.y + 8.0).r > 0.97 and px(img_late, behind.x, behind.y + 8.0).g > 0.85 and px(img_late, behind.x, behind.y + 8.0).b < 0.5:
+		var c := px(imgs[3], behind.x, behind.y + 8.0)
+		if c.r > 0.97 and c.g > 0.85 and c.b < 0.5:
 			line_hits += 1
 	check(line_hits == 0, "no gold line trails behind it (%d gold samples)" % line_hits)
 	var lit := 0
 	for k in 6:
 		var y: float = game.position.y + 30.0 + k * 30.0
-		if px(base, game.position.x - 2.0, y).g - px(img_late, game.position.x - 2.0, y).g > 0.1:
+		if px(base, game.position.x - 2.0, y).g - px(imgs[3], game.position.x - 2.0, y).g > 0.1:
 			lit += 1
 	check(lit == 0, "the game window's frame does not flash (%d of 6 samples changed)" % lit)
+	# a newer send takes the bracket over: it restarts at the window's middle, and the old one is gone
+	var target2 := alive_between(1, 17, 3)
+	fixed_target(target2)
+	var b = session.report_enemy_defeat(0, KIND.KOOPA)
+	view.update(0.0)
+	screen.refresh()
+	var rapid := await grab("attack_01d_player_send_rapid")
+	check(ret.flying.size() == 1 and ret.flying[0].seq == b.seq and ret.flying[0].target == target2 and float(ret.flying[0].progress) == 0.0, "a newer send takes over: one bracket in the air, the newest, back at its start")
+	check(red_corners_of_box(rapid, GEO.send_rect(layout, target, 14.0 / 15.0)) < 3, "...and the older bracket is not drawn any more (it never lands)")
+	check(red_corners_of_box(rapid, GEO.send_rect(layout, target2, 0.0)) >= 3, "...the new one sits at the window's middle")
 	# it lands, and one bracket is left
-	await frames(25)
+	screen.game_frozen = false
+	await frames(40)
 	var after := await grab("attack_01b_player_send_landed")
-	check(ret.flying.is_empty() and ret.persistent_visible() and ret.target == session.target_of(0) and red_corners_of_rect(after, layout.slots[ret.target - 1]) == 4, "it has landed: one bracket, on the session's target (#%d)" % ret.target)
+	check(ret.flying.is_empty() and ret.persistent_visible() and ret.target == session.target_of(0) and red_corners(after, layout, ret.target) == 4, "it has landed: one bracket, on the session's target (#%d)" % ret.target)
+	check(red_corners(after, layout, target) < 4 or ret.target == target, "(the cancelled one never settled on #%d)" % target)
 	var stray := 0
 	for k in range(1, 9):
-		var p := from.lerp(to, 0.1 * k)
+		var p := from.lerp(pane.get_center(), 0.1 * k)
 		if not game.has_point(p) and diff(px(after, p.x, p.y), px(base, p.x, p.y)) > 0.2:
 			stray += 1
 	check(stray <= 1, "and nothing is left on the screen along its way (%d stray samples)" % stray)
+
+func F_SECONDS() -> float:
+	return load("res://Scripts/Classes/Battle/BattleSendStyle.gd").SECONDS
 
 func test_bot_send(layout: Dictionary, game: Rect2) -> void:
 	print("-- a bot's send at another bot: nothing is drawn")
@@ -449,98 +475,142 @@ func test_incoming_in_preview(layout: Dictionary) -> void:
 	check(track.invaders.is_empty() and screen.panes[target - 1].incoming == Vector2i.ZERO, "when the session resolves them the preview and the pane are clear")
 	check(halo_pixels(img3, pane) <= halo_before + 60, "and the halos are gone from the picture")
 
-## The colour of the `k`-th icon's tile on the incoming bar (send order; BattleIncomingStrip.place_all), `dx` from its centre and `dy`
-## below the bar's top: by default just inside the tile's top-left, left of the enemy's little picture.
-func tile(img: Image, k: int, dx := -3.4, dy := 2.4) -> Color:
+## The bar's own pixel row at the icon `k`'s centre (send order; BattleIncomingStrip.place_all), `dx` from its centre and `dy` below the bar's top.
+func tile(img: Image, k: int, dx := 0.0, dy := 4.0) -> Color:
 	var bar = screen.incoming_strip
 	var xs: PackedFloat32Array = bar.place_all(bar.items, bar.size.x)
 	var r: Rect2 = screen.layout.strip_a
 	return px(img, floorf(r.position.x + xs[k] + dx), floorf(r.position.y + dy))
 
+## Whether icon `k`'s sprite is on the bar: some pixel in its 8 x 8 box differs clearly from the bar's own zone colour.
+func icon_drawn(img: Image, k: int, zone: Color) -> bool:
+	var bar = screen.incoming_strip
+	var xs: PackedFloat32Array = bar.place_all(bar.items, bar.size.x)
+	var r: Rect2 = screen.layout.strip_a
+	for dy in range(2, 11, 2):
+		for dx in range(-3, 4, 2):
+			if diff(px(img, floorf(r.position.x + xs[k] + dx), floorf(r.position.y + dy)), zone) > 0.2:
+				return true
+	return false
+
 func test_player_incoming(layout: Dictionary, game: Rect2) -> void:
-	print("-- attacks aimed at the real player")
+	print("-- attacks aimed at the real player: the bar, the lines, WATCH OUT! (doc 54)")
 	await wait_lines_gone()
 	var base := await grab()
+	var bar = screen.incoming_strip
+	var strip: Rect2 = layout.strip_a
+	# the three zones are the reference's flat colours
+	var gold_c := px(base, strip.position.x + 40.0, strip.position.y + 6.0)
+	var orange_c := px(base, strip.position.x + 130.0, strip.position.y + 6.0)
+	var dark_c := px(base, strip.position.x + 230.0, strip.position.y + 6.0)
+	check(diff(gold_c, bar.ZONE_GOLD) < 0.04 and diff(orange_c, bar.ZONE_ORANGE) < 0.04 and diff(dark_c, bar.ZONE_DARK) < 0.04, "the bar is the reference's gold, orange and darker orange (%s %s %s)" % [gold_c.to_html(false), orange_c.to_html(false), dark_c.to_html(false)])
+	# sends at the player: icons enter the bar at once, bare sprites
 	fixed_target(0)
 	var seqs := []
 	for i in 4:
 		seqs.append(session.report_enemy_defeat(alive_between(1, 34, 3 + i * 5), KIND.KOOPA if i == 0 else KIND.GOOMBA).seq)
-	await wait_flight(seqs[3], 0.3)
-	var img := await grab("attack_05_incoming_on_player_flights")
-	# the game window's frame does NOT light up (SMB35 does not flash it)
+	await frames(3)
+	var img := await grab("attack_05_incoming_on_player_icons")
+	check(bar.items.size() == 4 and bar.items.all(func(it): return not it.in_transit), "four sends at the player are four icons in the bar at once (none in transit)")
+	var drawn := 0
+	for i in 4:
+		if icon_drawn(img, i, bar.ZONE_DARK):
+			drawn += 1
+	check(drawn == 4, "each is a sprite on the bar (%d of 4)" % drawn)
+	var plate := 0
+	for i in 4:
+		var c := tile(img, i, -5.6, 4.0)
+		var bg_zone: Color = bar.ZONE_DARK
+		if diff(c, bg_zone) > 0.1:
+			plate += 1
+	check(plate == 0, "...bare: no plate or outline round any of them (%d of 4 have one)" % plate)
+	# the game window's frame does NOT light up
 	var lit := 0
 	for k in 6:
 		var y: float = game.position.y + 30.0 + k * 30.0
-		var c := px(img, game.position.x - 2.0, y)
-		var b := px(base, game.position.x - 2.0, y)
-		if b.g - c.g > 0.1:
+		if px(base, game.position.x - 2.0, y).g - px(img, game.position.x - 2.0, y).g > 0.1:
 			lit += 1
 	check(lit == 0, "the game window's frame does not flash red while attacks land (%d of 6 samples)" % lit)
-	# thin red lines, one per sender, from the sender's own pane into the incoming bar
-	var drawn_lines: Array = load("res://Scripts/Classes/Battle/BattleAttackLayer.gd").drawn_flights(screen.attack_view)
-	var line_ok := drawn_lines.size() == 4
-	for fl in drawn_lines:
-		var a_pt: Vector2 = GEO.launch_point(layout, fl.sender, 0)
-		var b_pt: Vector2 = GEO.landing_point(layout, fl.sender, 0)
-		var head: Vector2 = a_pt.lerp(b_pt, fl.eased(screen.attack_view.clock))
-		var red_samples := 0
-		for k in range(1, 7):
-			var p := a_pt.lerp(head, k / 7.0)
-			if red_near(img, p.x, p.y):
-				red_samples += 1
-		if red_samples < 4:
-			line_ok = false
-		if not (layout.slots[fl.sender - 1] as Rect2).has_point(a_pt):
-			line_ok = false
-	check(line_ok, "each of the four attacks is a thin solid red line from its sender's pane towards the incoming bar")
-	var strip: Rect2 = layout.strip_a
-	# M6b (sampled in the column just left of the enemy's little picture, on the icon's own fill): while their lines are in the air the four icons are hollow place-holders (dark inside); once the lines land they are dim (QUEUED)
-	var hollow := 0
-	var hollow_colors := []
-	for i in 4:
-		var c := tile(img, i)
-		hollow_colors.append(c.to_html(false))
-		if diff(c, screen.incoming_strip.ZONE_DARK) < 0.1: # nothing filled in: the bar's own colour
-			hollow += 1
-	check(hollow >= 3 and screen.incoming_strip.items.all(func(it): return it.in_transit), "four attacks whose lines are still in the air are four hollow (in transit) icons at the right end of the incoming bar (%d hollow: %s)" % [hollow, hollow_colors])
-	await wait_lines_gone()
-	await frames(40) # the 'new' outlines have faded too
-	var landed := await grab("attack_05_incoming_on_player_strip_queued")
-	var dim := 0
-	for i in 4:
-		var c := tile(landed, i)
-		if c.r < 0.7 and c.r > 0.3 and c.g < 0.4 and c.b < 0.3:
-			dim += 1
-	check(dim >= 3, "once the lines have landed they are four dim (QUEUED) icons in the incoming strip (%d dim)" % dim)
-	check(screen.incoming_strip.counts == Vector2i(4, 0), "(the strip counts 4 queued / 0 active)")
+	# (the test's policy sends every re-target at the player, so the four senders aim at the player now: clear every aim first)
+	for id in range(1, 35):
+		if session.contestants[id].alive and session.contestants[id].target_id == 0:
+			session.attacks.set_target(session, id, 1 if id != 1 else 2)
+	await frames(3)
+	check(not screen.status_strip.is_showing() and screen.attack_view.lines().is_empty(), "with nobody aiming at the player there is no line and no WATCH OUT!")
+	# an opponent starts aiming at the player: its thin red line grows from its pane to the pill, and the pill appears
+	var pill: Rect2 = layout.pill
+	var sender := alive_between(1, 17, 6)
+	if session.contestants[sender].target_id == 0:
+		session.attacks.set_target(session, sender, alive_between(1, 17, 8))
+	session.attacks.set_target(session, sender, 0)
+	await frames(2)
+	var early := await grab("attack_05_line_growing")
+	await frames(30)
+	var full := await grab("attack_05_line_full")
+	var lines: Array = load("res://Scripts/Classes/Battle/BattleAttackLayer.gd").drawn_lines(screen.attack_view)
+	check(lines.size() >= 1 and lines.any(func(l): return l.sender == sender and float(l.progress) == 1.0), "the line of the opponent that aims at the player has grown all the way (%d lines)" % lines.size())
+	var a_pt: Vector2 = GEO.launch_point(layout, sender, 0)
+	var b_pt: Vector2 = GEO.landing_point(layout, sender, 0)
+	var red_samples := 0
+	for k in range(1, 8):
+		var p := a_pt.lerp(b_pt, k / 8.0)
+		if red_near(full, p.x, p.y):
+			red_samples += 1
+	check(red_samples >= 5 and (layout.slots[sender - 1] as Rect2).has_point(a_pt), "it is a thin solid red line from the sender's own pane to the pill (%d of 7 samples red)" % red_samples)
+	check(is_equal_approx(b_pt.x, pill.position.x) and is_equal_approx(b_pt.y, pill.position.y + GEO.PILL_LINE_DROP), "it ends on the pill's left edge, for a sender in the left panel")
+	var half_red := 0
+	for k in range(1, 8):
+		var p := a_pt.lerp(b_pt, 0.5 + k / 16.0)
+		if red_near(early, p.x, p.y):
+			half_red += 1
+	check(half_red <= 3, "two frames after it starts the head is still near its pane: the far half is not drawn yet (%d red samples)" % half_red)
+	# WATCH OUT!: black plate with a red ring, white flash decayed
+	await frames(8)
+	var pill_img := await grab("attack_05_watch_out")
+	var plate_px := px(pill_img, pill.position.x + 10.5, pill.get_center().y)
+	var ring_px := px(pill_img, pill.position.x + 7.0, pill.get_center().y)
+	check(screen.status_strip.is_showing() and plate_px.r < 0.2 and plate_px.g < 0.2 and plate_px.b < 0.2, "WATCH OUT! is up: a black plate (%s)" % plate_px.to_html(false))
+	check(ring_px.r > 0.9 and ring_px.g < 0.2 and ring_px.b < 0.2, "inside a red ring (%s)" % ring_px.to_html(false))
+	var stripe_px := px(pill_img, pill.position.x + 4.5, pill.get_center().y)
+	check(stripe_px.r > 0.9 and stripe_px.g > 0.25 and stripe_px.g < 0.5 and stripe_px.b < 0.1, "and an orange stripe at each end (%s)" % stripe_px.to_html(false))
+	# the opponent stops aiming: line and pill go that frame
+	session.attacks.set_target(session, sender, alive_between(1, 17, 8))
+	await frames(3)
+	var gone := await grab("attack_05_line_gone")
+	check(not screen.status_strip.is_showing() and not red_near(gone, a_pt.lerp(b_pt, 0.5).x, a_pt.lerp(b_pt, 0.5).y), "when it stops aiming the line and WATCH OUT! are gone")
+	# the bar: icons travel at constant speed, then wait at the gold boundary
+	var x_a: float = bar.place_all(bar.items, bar.size.x)[0]
+	await frames(30)
+	check(bar.place_all(bar.items, bar.size.x)[0] < x_a, "(the icons are travelling left)")
 	advance(3) # three go ACTIVE, the fourth waits
-	await frames(1)
-	var flash := await grab("attack_05_incoming_on_player_strip_flash")
+	await frames(80)
 	check(screen.incoming_strip.counts == Vector2i(1, 3), "the strip counts 1 queued / 3 active")
-	var whitened := 0
-	for i in 3:
-		var c := tile(flash, i, -3.0, 2.4) # (the icons are still on their way: a pixel or two of margin from the tile's edge)
-		if c.r > 0.9 and c.g > 0.32:
-			whitened += 1
-	check(whitened >= 2, "the icons that just became ACTIVE flash (%d of 3 whitened)" % whitened)
-	await wait_lines_gone()
-	await frames(60)
 	var settled := await grab("attack_05_incoming_on_player_strip_settled")
-	var lit_icons := 0 # (nothing spawns in this test, so an ACTIVE attack is ARRIVING: amber; in the level it would be red)
-	var lit_colors := []
-	for i in 3:
-		var c := tile(settled, i)
-		lit_colors.append(c.to_html(false))
-		if c.r > 0.7 and c.g > 0.35 and c.g < 0.65 and c.b < 0.25:
-			lit_icons += 1
-	var dim_icon := tile(settled, 3, -3.4, 5.5)
-	var after_icons: Vector2 = Vector2(strip.position.x + screen.incoming_strip.gold_end(strip.size.x) + 8.0 + 10.0 * 6.0, strip.position.y + 5.5) # past the last waiting slot
+	var xs: PackedFloat32Array = bar.place_all(bar.items, bar.size.x)
+	var boundary: float = bar.gold_end(strip.size.x)
+	check(is_equal_approx(xs[0], boundary + bar.WAIT_OFFSET) and is_equal_approx(xs[1] - xs[0], bar.PITCH), "the first waits at the gold boundary, the others one pitch behind each other")
+	var waiting_drawn := 0
+	for i in 4:
+		if icon_drawn(settled, i, bar.ZONE_ORANGE):
+			waiting_drawn += 1
+	check(waiting_drawn == 4, "all four are on the bar, waiting (%d of 4)" % waiting_drawn)
+	var after_icons: Vector2 = Vector2(strip.position.x + boundary + bar.WAIT_OFFSET + bar.PITCH * 6.0, strip.position.y + 5.5) # past the last waiting slot
 	var empty := px(settled, after_icons.x, after_icons.y)
-	var bar: Color = screen.incoming_strip.ZONE_ORANGE # the bar's middle zone, where the icons wait
-	check(lit_icons == 3, "three lit (ACTIVE, arriving: amber) icons once the flash has died down (%s)" % [lit_colors])
-	check(dim_icon.r < 0.7 and dim_icon.r > 0.3 and dim_icon.g < 0.4, "and a dim one for the attack that is still queued (%s)" % dim_icon.to_html(false))
-	check(diff(empty, bar) < 0.05, "and nothing after them (%s)" % empty.to_html(false))
+	check(diff(empty, bar.ZONE_ORANGE) < 0.05, "and nothing after them (%s)" % empty.to_html(false))
 	check(not screen.incoming_strip.show_legend, "the bar carries no text or counts (the debug legend is off)")
+	# the release: an icon whose enemy appears runs on across the boundary and is gone (no marker is left behind)
+	var seq0: int = int(bar.items[0].seq)
+	check(session.report_player_incoming_spawned(seq0), "(the real game puts the first enemy in the level)")
+	await frames(40)
+	var released := await grab("attack_05_incoming_released")
+	var bx: float = strip.position.x + boundary
+	var left_marker := 0
+	for dx in range(-30, -4, 3):
+		for dy in range(3, 10, 2):
+			var c := px(released, bx + dx, strip.position.y + dy)
+			if diff(c, bar.ZONE_GOLD) > 0.15 and not (c.r > 0.85 and c.g < 0.3):
+				left_marker += 1 # (a thin red line of an attacker may cross the zone: that is not a marker)
+	check(left_marker == 0, "the released icon leaves no marker in the gold zone (%d off-colour samples)" % left_marker)
 	var ground := px(settled, game.position.x + 100.0, game.end.y - 20.0)
 	check(diff(ground, px(base, game.position.x + 100.0, game.end.y - 20.0)) < 0.05, "the game window itself shows nothing of them: its ground is as before")
 	var spawned := 0
@@ -567,15 +637,11 @@ func test_stress() -> void:
 			sent += 1 # (a bot that has been eliminated cannot send)
 	await frames(2)
 	var img := await grab("attack_06_stress")
-	var in_air: int = screen.attack_view.flights.size()
-	var presented := 0
-	for f in screen.attack_view.flights:
-		if f.sender == 0 or f.target == 0:
-			presented += 1
-	check(sent >= 12 and in_air == presented and in_air <= sent, "of %d simultaneous sends only the ones that involve the real player are in the air (%d flights): bot-to-bot sends draw nothing" % [sent, in_air])
+	var in_air: int = screen.attack_view.player_flights().size()
+	check(sent >= 12 and in_air <= 1 and screen.attack_view.flights.filter(func(f): return f.sender != 0).is_empty(), "of %d simultaneous sends only the real player's can be in the air, and only the newest of them (%d): nothing else is drawn as a flight" % [sent, in_air])
 	await frames(10)
 	var per_draw: float = float(layer.stat_draw_us) / maxi(layer.stat_draws, 1)
-	check(per_draw < 10000.0, "drawing what is left costs %.0f us a frame (limit 10 ms; the old line pile-up cost about 5 draws a line)" % per_draw)
+	check(per_draw < 10000.0, "drawing what is left costs %.0f us a frame (limit 10 ms)" % per_draw)
 	var invaders := 0
 	for id in screen.driver.tracks:
 		invaders += screen.driver.tracks[id].invaders.size()

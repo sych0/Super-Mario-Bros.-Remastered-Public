@@ -1,66 +1,49 @@
 class_name BattleIncomingStrip
 extends Control
-## The real player's incoming enemies, in the bar under the game window (doc 47 B35-INCOMING-001, the reference's
-## strip A). The bar is three zones, gold on the left third, orange, then darker orange, split by jagged (three-tooth)
-## boundaries. The player's own icon, in its current power state, stands at the left end of the gold zone. Enemy
-## icons enter at the RIGHT end and travel LEFT to the gold boundary, which is where an enemy is released into the
-## level; the ones the real game has released sit in the gold zone:
-##   QUEUED (line in the air)  a hollow dotted placeholder at the right end: sent, not landed yet
-##   QUEUED (landed)           travels left from the right end; it reaches the boundary after the attack system's own
-##                             ACTIVATION_DELAY (counted from the send), a yellow outline pulses once as it lands
-##   ARRIVING                  waits at the boundary (amber pulsing outline): ACTIVE, its enemy is not in the level yet;
-##                             the icon flashes white as it becomes ACTIVE
-##   IN_LEVEL                  crosses the boundary into the gold zone (white flash at the boundary) and stays there with a
-##                             solid red outline: its one real enemy is in the player's level
-##   RESOLVED                  the icon stays where it was and fades: green if the player defeated it, grey otherwise
-## An icon's phase is BattleAttackPresentation.Phase, derived from the session's own state (never stored here), and its
-## place is a pure function of the phase and the row's ages (`place_all`), so the bar always matches the authoritative
-## queue. `rows` and `counts` are exactly the session's unresolved attacks; the fading icons are drawn in addition and
-## are never in them. There are no words and no counts on the bar (the reference has none); the old legend is kept for
-## the debug-label mode (`show_legend`).
-##
-## One deliberate difference from the reference, kept from M6b: the reference removes an icon when its enemy is
-## released; here it stays in the gold zone as a marker for as long as that enemy is in the level, because that is how the
-## player sees which incoming enemies are still alive.
+## The real player's incoming enemies, in the bar under the game window (doc 47 B35-INCOMING-001, the reference's strip A), as measured on
+## the reference at 60 fps (doc 54). The bar is three zones, gold on the left, orange, then darker orange, split by two jagged boundaries (a
+## zig-zag of two teeth, 3 units deep) at x 202.6 and 288.0 on the canvas. The player's own icon, in its current power state, stands at the
+## left end of the gold zone. An enemy icon is a bare sprite about 8 units wide (no plate, no outline, no text):
+##   it appears at the bar's RIGHT end the moment the enemy is sent (its attack's `sent` time), and travels LEFT at a constant speed
+##   (the reference's is 47 units/s, tied here to the attack system's own ACTIVATION_DELAY so it gets to the boundary as the attack
+##   becomes ACTIVE), a queue of icons keeping one PITCH apart;
+##   it waits at the gold boundary while it is ACTIVE and its enemy is not in the level yet (ARRIVING);
+##   when its enemy appears in the level (IN_LEVEL) it crosses the boundary and is GONE: the reference removes an icon at that moment,
+##   with no flash and nothing left behind. (M6b kept a marker in the gold zone for as long as the enemy lived; doc 54 removes it:
+##   `place_all` and `_draw` are the only places that would bring it back.)
+## An icon's phase is BattleAttackPresentation.Phase, derived from the session's own state (never stored here), and its place is a pure
+## function of the phase and the row's ages (`place_all`), so the bar always matches the authoritative queue. `rows` and `counts` are
+## exactly the session's unresolved attacks. There are no words and no counts on the bar (the reference has none); the old legend is kept
+## for the debug-label mode (`show_legend`).
 ##
 ## Nothing here reaches the game: the strip never spawns, resolves or times anything.
 
 const Phase := BattleAttackPresentation.Phase
 
-# ---- colours ------------------------------------------------------------------------------------------------------
-const ZONE_GOLD := Color8(255, 208, 48)
-const ZONE_ORANGE := Color8(255, 150, 28)
-const ZONE_DARK := Color8(226, 104, 18)
+# ---- colours (measured: the three zones' flat fills) ----------------------------------------------------------------
+const ZONE_GOLD := Color8(255, 189, 9)
+const ZONE_ORANGE := Color8(255, 118, 0)
+const ZONE_DARK := Color8(245, 85, 17)
 const LABEL := Color(1.0, 0.9, 0.6, 1)
-const QUEUED_FILL := Color(0.42, 0.28, 0.2, 0.9)
-const ARRIVING_FILL := Color(0.86, 0.5, 0.08, 0.95)
-const IN_LEVEL_FILL := Color(0.95, 0.2, 0.1, 0.95)
-const DEFEATED_FILL := Color(0.2, 0.72, 0.3, 1)
-const ENDED_FILL := Color(0.5, 0.55, 0.65, 1)
 const FLASH := Color(1, 1, 1, 1)
-const NEW_EDGE := Color(1.0, 0.95, 0.35, 1)
-const IN_LEVEL_EDGE := Color(1.0, 0.85, 0.7, 1)
-const ARRIVING_EDGE := Color(1.0, 0.8, 0.35, 1)
-const TRANSIT_EDGE := Color(0.85, 0.7, 0.55, 1)
 const TEXT_QUEUED := Color(0.85, 0.7, 0.55, 1)
 const TEXT_ARRIVING := Color(1.0, 0.78, 0.3, 1)
 const TEXT_IN_LEVEL := Color(1.0, 0.45, 0.35, 1)
 
 # ---- geometry (strip-local, 257 x 12) --------------------------------------------------------------------------------
-const GOLD_FRACTION := 1.0 / 3.0 ## where the gold zone ends
-const ORANGE_FRACTION := 2.0 / 3.0 ## where the orange zone ends
-const TEETH := 3 ## teeth of a jagged boundary over the bar's height
-const TOOTH_DEPTH := 2.0
-const ICON_W := 9.0
-const PITCH := 10.0 ## between neighbouring icons
+const GOLD_FRACTION := 0.3545 ## where the gold zone ends: x 202.6 on the canvas, measured (the zig-zag runs 201.0-204.25)
+const ORANGE_FRACTION := 0.6868 ## where the orange zone ends: x 288.0 (286.5-289.6)
+const TOOTH_DEPTH := 3.2 ## how far the zig-zag swings across a boundary
+const ICON_W := 8.0 ## an enemy icon's width: a 16 x 16 sprite at half size
+const PITCH := 10.8 ## between neighbouring waiting icons
 const PLAYER_X := 2.0 ## the player's icon's left edge
-const IN_LEVEL_X0 := 20.0 ## centre of the first in-level marker
 const WAIT_OFFSET := 8.0 ## from the boundary to the centre of the first waiting icon
-const ENTRY_INSET := 7.0 ## the right end's icon centre, from the strip's right edge
-const MAX_IN_LEVEL := 6
+const ENTRY_INSET := 4.5 ## the right end's icon centre, from the strip's right edge
 const MAX_WAITING := 14
-const TRAVEL_SECONDS := BattleAttackSystem.ACTIVATION_DELAY - BattleAttackFlight.DURATION ## landing to the boundary
+const TRAVEL_SECONDS := float(BattleAttackSystem.ACTIVATION_DELAY) ## from the send to the boundary: the attack's own activation delay
 const CATCH_UP_SECONDS := 0.3 ## an ACTIVE icon that is not at the boundary yet (the sim ran ahead of the clock) gets there in this long
+const CROSS_SPEED := 47.0 ## units/s an icon runs across the boundary when its enemy appears (the reference's travel speed, measured)
+const FOLLOW := 1.5 ## the drawn icon may move this many times the travel speed to catch its place (a queue closing up)
 const TEXT_SCALE := 0.6
 const TEXT_GAP := 6.0
 const RIGHT_PAD := 3.0
@@ -73,10 +56,12 @@ var show_legend := false ## debug-label mode: the old "IN LEVEL 1 / ARRIVING 2 /
 var rows: Array[Dictionary] = [] ## what the strip counts: the real player's unresolved attacks at the last sync
 var counts := Vector2i.ZERO ## (queued, active) at the last sync
 var phases := Vector3i.ZERO ## (queued, arriving, in level) at the last sync: `counts.y` split in two
-var ghosts: Array[Dictionary] = [] ## attacks that just ended, fading where their icon was (not in `rows`)
-var items: Array[Dictionary] = [] ## what is drawn, in send order: `rows` and `ghosts` merged (a ghost has `ghost` = true)
+var ghosts: Array[Dictionary] = [] ## attacks that just ended (data for the HUD's readers; the reference draws nothing for them)
+var items: Array[Dictionary] = [] ## what is drawn, in send order: the `rows`
 
 var _signature := -1
+var _shown := {} ## seq -> the x its icon is drawn at (it follows `place_all`'s place at a bounded speed)
+var _last_clock := -1.0
 
 func _init(font_: Font = null) -> void:
 	name = "IncomingStrip"
@@ -88,6 +73,8 @@ func bind(view_: BattleAttackPresentation, assets_: BattlePreviewAssets) -> void
 	view = view_
 	assets = assets_
 	_signature = -2
+	_shown.clear()
+	_last_clock = -1.0
 	sync()
 
 ## The player's power state, for the icon at the left end (0 small, 1 big, 2 fire).
@@ -96,53 +83,62 @@ func set_power(power_: int) -> void:
 		power = power_
 		queue_redraw()
 
-## Reads the presentation (every frame). Redraws when the list changed, and every frame while anything animates.
+## Reads the presentation (every frame). Redraws when the list changed, and every frame while anything moves.
 func sync() -> void:
 	if view == null:
 		rows.clear()
 		ghosts.clear()
 		counts = Vector2i.ZERO
 		phases = Vector3i.ZERO
+		_shown.clear()
 	else:
 		rows = view.player_incoming()
 		ghosts = view.player_resolved()
 		counts = view.counts(BattleSession.PLAYER_ID)
 		phases = view.player_phase_counts()
-	items = merged(rows, ghosts)
-	var sig := rows.size() * 7 + counts.x * 131 + counts.y * 1031 + ghosts.size() * 8191 + power * 65537
+	items = rows.duplicate()
+	var moving := _follow()
+	var sig := rows.size() * 7 + counts.x * 131 + counts.y * 1031 + power * 65537
 	for r in rows:
 		sig = sig * 31 + int(r.seq) * 3 + int(r.phase)
-	if view != null and (view.is_animating() or _travelling()):
-		sig = -3 - Engine.get_process_frames() # animating: redraw every frame
+	if moving:
+		sig = -3 - Engine.get_process_frames() # something is moving: redraw every frame
 	if sig != _signature:
 		_signature = sig
 		queue_redraw()
 
-## Whether any icon is still travelling to the boundary (it moves every frame).
-func _travelling() -> bool:
-	for r in rows:
-		if int(r.phase) == Phase.QUEUED and not r.in_transit and float(r.age) < TRAVEL_SECONDS + 0.1:
-			return true
-		if int(r.phase) != Phase.QUEUED and float(r.waited) >= 0.0 and float(r.waited) < CATCH_UP_SECONDS + 0.1:
-			return true
-	return false
+## Moves every drawn icon towards its place (`place_all`) by at most FOLLOW * the travel speed per second of presentation time.
+## Returns whether any icon is still on its way (or about to leave).
+func _follow() -> bool:
+	var dt := 0.0
+	if view != null:
+		dt = clampf(view.clock - _last_clock, 0.0, 0.25) if _last_clock >= 0.0 else 0.0
+		_last_clock = view.clock
+	var xs := place_all(items, size.x)
+	var keep := {}
+	var moving := false
+	var step := FOLLOW * travel_speed(size.x) * dt
+	for i in items.size():
+		var seq := int(items[i].seq)
+		keep[seq] = true
+		var target := xs[i]
+		var cur: float = _shown.get(seq, entry_x(size.x))
+		if dt <= 0.0 and not _shown.has(seq):
+			cur = target # a presentation made mid-round: the icons are where they belong
+		var nxt := target if absf(target - cur) <= step else cur + signf(target - cur) * step
+		_shown[seq] = nxt
+		var leaving := int(items[i].phase) == Phase.IN_LEVEL
+		# (an icon that has caught up with a target that is itself still travelling is moving: it must be redrawn next frame too)
+		if absf(target - nxt) > 0.01 or (leaving and crossed(items[i]) < 1.0) or (not leaving and progress_of(items[i]) < 1.0):
+			moving = true
+	for seq in _shown.keys():
+		if not keep.has(seq):
+			_shown.erase(seq)
+	return moving
 
-## `rows` and `ghosts` (both in send order) as one list in send order. A ghost keeps the slot its attack had.
-static func merged(rows_: Array[Dictionary], ghosts_: Array[Dictionary]) -> Array[Dictionary]:
-	var out: Array[Dictionary] = []
-	var i := 0
-	var j := 0
-	while i < rows_.size() or j < ghosts_.size():
-		if j >= ghosts_.size() or (i < rows_.size() and int(rows_[i].seq) < int(ghosts_[j].seq)):
-			out.append(rows_[i])
-			i += 1
-		else:
-			var g: Dictionary = ghosts_[j].duplicate()
-			g["ghost"] = true
-			g["phase"] = Phase.RESOLVED
-			out.append(g)
-			j += 1
-	return out
+## `rows` as the list the strip draws (an ended attack leaves with no fade: the reference has none). Kept for the readers that merge both.
+static func merged(rows_: Array[Dictionary], _ghosts: Array[Dictionary] = []) -> Array[Dictionary]:
+	return rows_.duplicate()
 
 ## The counts per phase as text pieces, in the order the icons run: [{text, phase}]. Only phases that have any.
 ## `short` uses the abbreviations for a crowded strip.
@@ -162,72 +158,75 @@ static func legend(phases_: Vector3i, short := false) -> Array[Dictionary]:
 static func gold_end(width: float) -> float:
 	return width * GOLD_FRACTION
 
+## The x of the orange / dark boundary's centre.
+static func orange_end(width: float) -> float:
+	return width * ORANGE_FRACTION
+
 ## Where the right end's icons come in.
 static func entry_x(width: float) -> float:
 	return width - ENTRY_INSET
 
-## The centre x of each item of `items_` (a merged list, in send order) in a strip `width` wide, at this instant: by phase,
-## in send order. In-level icons (and fading ghosts that were in the level) take the gold zone's slots in order; the
-## rest take the slots right of the boundary in order; one still in the air waits at the right end; a landed one
-## is on its way from the right end to its slot; one that became ACTIVE is there at the latest CATCH_UP_SECONDS later.
+## The speed icons travel at, units per second: from the entry to the first waiting place in TRAVEL_SECONDS (the reference's own is 47).
+static func travel_speed(width: float) -> float:
+	return (entry_x(width) - gold_end(width) - WAIT_OFFSET) / TRAVEL_SECONDS
+
+## The centre x of each item of `items_` (in send order) in a strip `width` wide, at this instant, by phase: an icon travelling from the
+## right end at a constant speed to its place in the queue right of the gold boundary (the front one waits WAIT_OFFSET past it, the
+## others one PITCH behind each other); an ACTIVE icon is there at the latest CATCH_UP_SECONDS after it became ACTIVE; an icon whose
+## enemy is in the level (IN_LEVEL) is crossing the boundary and leaves it (`crossed`).
 static func place_all(items_: Array, width: float) -> PackedFloat32Array:
 	var out := PackedFloat32Array()
 	var boundary := gold_end(width)
 	var entry := entry_x(width)
-	var in_level := 0
 	var waiting := 0
 	for it in items_:
-		var in_gold := bool(it.get("spawned", false)) if it.get("ghost", false) else int(it.phase) == Phase.IN_LEVEL
-		if in_gold:
-			var slot := IN_LEVEL_X0 + mini(in_level, MAX_IN_LEVEL - 1) * PITCH
-			in_level += 1
-			var crossed: float = 1.0 - float(it.get("arrive", 0.0)) # 0 at the moment the enemy appears, 1 once it has settled
-			out.append(lerpf(boundary, slot, 1.0 - (1.0 - crossed) * (1.0 - crossed)) if not it.get("ghost", false) else slot)
+		var slot := boundary + WAIT_OFFSET + mini(waiting, MAX_WAITING - 1) * PITCH
+		if int(it.phase) == Phase.IN_LEVEL:
+			out.append(lerpf(slot, boundary, crossed(it))) # the enemy appeared: the icon runs on across the boundary and is gone
 			continue
-		var target := boundary + WAIT_OFFSET + mini(waiting, MAX_WAITING - 1) * PITCH
 		waiting += 1
-		if it.get("ghost", false):
-			out.append(target)
-			continue
-		out.append(lerpf(entry, target, progress_of(it)))
+		out.append(lerpf(entry, slot, progress_of(it)))
 	return out
 
-## 0..1: how far an icon that is not in the level has travelled from the right end to its slot.
+## 0..1: how far an icon that is not in the level has travelled from the right end to its place (linear in time: constant speed).
 static func progress_of(it: Dictionary) -> float:
-	if bool(it.get("in_transit", false)):
-		return 0.0
 	var p := clampf(float(it.get("age", 0.0)) / TRAVEL_SECONDS, 0.0, 1.0)
 	var waited := float(it.get("waited", -1.0))
 	if waited >= 0.0:
 		p = maxf(p, clampf(waited / CATCH_UP_SECONDS, 0.0, 1.0))
 	return p
 
+## 0..1: how far an IN_LEVEL icon has run across the boundary since its enemy appeared (at travel speed); 1 and it is not drawn.
+static func crossed(it: Dictionary) -> float:
+	var elapsed := (1.0 - float(it.get("arrive", 0.0))) * BattleAttackPresentation.SPAWN_FLASH
+	return clampf(elapsed * CROSS_SPEED / WAIT_OFFSET, 0.0, 1.0)
+
 # ---- drawing ------------------------------------------------------------------------------------------------------
 
 func _draw() -> void:
 	_zones()
 	_player_icon()
-	var xs := place_all(items, size.x)
 	var end_x := 0.0
-	for i in items.size():
-		_icon(items[i], xs[i])
-		end_x = maxf(end_x, xs[i] + ICON_W)
-	_boundary_flash()
+	for it in items:
+		var cx: float = _shown.get(int(it.seq), place_all([it], size.x)[0])
+		if int(it.phase) == Phase.IN_LEVEL and crossed(it) >= 1.0:
+			continue # released: the reference removes the icon
+		_icon(it, cx)
+		end_x = maxf(end_x, cx + ICON_W)
 	if show_legend:
 		_draw_legend(end_x + 3.0)
 
-## A jagged vertical boundary at `x`: the polygon points from the top to the bottom edge.
+## A jagged vertical boundary centred at `x`: the polygon points from the top to the bottom edge, a zig-zag of two teeth swinging
+## TOOTH_DEPTH across (measured: leftmost at 29% and 84% of the height, rightmost at the top, at 58% and, half way, at the bottom).
 static func jagged(x: float, height: float) -> PackedVector2Array:
-	var pts := PackedVector2Array()
-	var n := TEETH * 2
-	for i in n + 1:
-		pts.append(Vector2(x + (TOOTH_DEPTH if i % 2 == 1 else 0.0), height * i / n))
-	return pts
+	var left := x - TOOTH_DEPTH / 2.0
+	return PackedVector2Array([Vector2(left + TOOTH_DEPTH * 0.92, 0.0), Vector2(left, height * 0.29),
+		Vector2(left + TOOTH_DEPTH, height * 0.58), Vector2(left, height * 0.84), Vector2(left + TOOTH_DEPTH * 0.45, height)])
 
 func _zones() -> void:
 	var h := size.y
 	var b1 := gold_end(size.x)
-	var b2 := size.x * ORANGE_FRACTION
+	var b2 := orange_end(size.x)
 	draw_rect(Rect2(Vector2.ZERO, size), ZONE_DARK)
 	var orange := jagged(b1, h)
 	var back := jagged(b2, h)
@@ -251,71 +250,10 @@ func _player_icon() -> void:
 	draw_rect(Rect2(feet + Vector2(-3, -7.5), Vector2(6, 3)), Color(0.98, 0.76, 0.52))
 	draw_rect(Rect2(feet + Vector2(-4, -4.5), Vector2(8, 4)), Color(0.2, 0.3, 0.85) if power < 2 else Color(1.0, 0.95, 0.9))
 
+## One enemy icon: the bare sprite, standing on the bar's bottom edge (the reference draws nothing round it).
 func _icon(item: Dictionary, cx: float) -> void:
-	var r := Rect2(cx - ICON_W / 2.0, 1.0, ICON_W, size.y - 2.0)
 	var t := view.clock * 5.0 if view != null else 0.0
-	var feet := Vector2(cx, r.end.y - 0.5)
-	if item.get("ghost", false):
-		_ghost(item, r, feet, t)
-		return
-	match int(item.phase):
-		Phase.QUEUED:
-			if item.in_transit: # sent, the line has not landed: a hollow place-holder at the right end
-				_dotted(r, _alpha(TRANSIT_EDGE, 0.8))
-				BattleEnemyIcon.draw(self, item.kind, feet, 0.5, assets, t, 0.3, r.size.y - 1.0)
-			else:
-				draw_rect(r, QUEUED_FILL)
-				BattleEnemyIcon.draw(self, item.kind, feet, 0.5, assets, t, 0.9, r.size.y - 1.0)
-		Phase.ARRIVING:
-			draw_rect(r, ARRIVING_FILL)
-			BattleEnemyIcon.draw(self, item.kind, feet, 0.5, assets, t, 1.0, r.size.y - 1.0)
-			draw_rect(r.grow(0.5), _alpha(ARRIVING_EDGE, 0.35 + 0.65 * (0.5 + 0.5 * sin(_time() * 7.0))), false, 0.75)
-		_: # IN_LEVEL
-			draw_rect(r, IN_LEVEL_FILL)
-			BattleEnemyIcon.draw(self, item.kind, feet, 0.5, assets, t, 1.0, r.size.y - 1.0)
-			draw_rect(r.grow(0.5), IN_LEVEL_EDGE, false, 0.75)
-	if item.fresh > 0.0: # its line just landed
-		draw_rect(r.grow(0.5), _alpha(NEW_EDGE, item.fresh), false, 0.75)
-	if item.flash > 0.0: # QUEUED -> ACTIVE just happened
-		draw_rect(r, Color(1, 1, 1, 0.45 * item.flash))
-		draw_rect(r.grow(1.0), _alpha(FLASH, item.flash), false, 0.75)
-	if item.arrive > 0.0: # its enemy just appeared in the level
-		draw_rect(r, Color(1, 1, 1, 0.55 * item.arrive))
-		draw_rect(r.grow(1.0), _alpha(FLASH, item.arrive), false, 0.75)
-
-## The release: when an enemy appears in the level, a white flash runs down the gold boundary.
-func _boundary_flash() -> void:
-	var a := 0.0
-	for r in rows:
-		if int(r.phase) == Phase.IN_LEVEL:
-			a = maxf(a, float(r.arrive))
-	if a <= 0.0:
-		return
-	var b := gold_end(size.x)
-	draw_colored_polygon(PackedVector2Array([Vector2(b - 2.0, 0), Vector2(b + 4.0, 0), Vector2(b + 4.0, size.y), Vector2(b - 2.0, size.y)]),
-		Color(1, 1, 1, 0.7 * a))
-
-## A just-resolved attack: its icon stays in its slot and fades; green when the player defeated it.
-func _ghost(item: Dictionary, r: Rect2, feet: Vector2, t: float) -> void:
-	var f: float = item.fade
-	var defeated: bool = int(item.cause) == BattleAttack.Resolution.DEFEATED_BY_PLAYER
-	draw_rect(r, _alpha(DEFEATED_FILL if defeated else ENDED_FILL, (0.9 if defeated else 0.55) * f))
-	BattleEnemyIcon.draw(self, item.kind, feet, 0.5, assets, t, 0.6 * f, r.size.y - 1.0)
-	if defeated:
-		draw_rect(r.grow(0.5 + (1.0 - f)), _alpha(FLASH, 0.8 * f), false, 0.75)
-
-func _dotted(r: Rect2, color: Color) -> void:
-	var step := 2.0
-	var px := r.position.x
-	while px < r.end.x:
-		draw_rect(Rect2(px, r.position.y, 1.0, 1.0), color)
-		draw_rect(Rect2(px, r.end.y - 1.0, 1.0, 1.0), color)
-		px += step
-	var py := r.position.y
-	while py < r.end.y:
-		draw_rect(Rect2(r.position.x, py, 1.0, 1.0), color)
-		draw_rect(Rect2(r.end.x - 1.0, py, 1.0, 1.0), color)
-		py += step
+	BattleEnemyIcon.draw(self, item.kind, Vector2(cx, size.y - 0.6), 0.5, assets, t, 1.0, size.y - 1.0)
 
 func _draw_legend(left_limit: float) -> void:
 	if font == null:

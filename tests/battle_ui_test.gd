@@ -79,6 +79,7 @@ func _run() -> void:
 	test_selector_state_and_geometry()
 	test_reticle()
 	test_attack_visuals_removed()
+	test_lines()
 	test_incoming_bar_placement()
 	test_incoming_bar_phase_mapping()
 	test_watch_out_and_status()
@@ -191,65 +192,85 @@ func test_selector_state_and_geometry() -> void:
 # ---- the reticle -------------------------------------------------------------------------------------------------------
 
 func test_reticle() -> void:
-	print("-- the reticle")
+	print("-- the reticle (doc 54: thick rounded corners inside the pane, a 59-frame idle pulse, no punch)")
+	var GEO = load("res://Scripts/Classes/Battle/BattleAttackGeometry.gd")
+	var SS = load("res://Scripts/Classes/Battle/BattleSendStyle.gd")
 	var slots: Array = layout.slots
-	var ok_outside := true
-	var ok_gap := true
+	var ok_inside := true
+	var ok_corners := true
 	var ok_arms := true
+	var ok_open := true
 	for i in slots.size():
 		var pane: Rect2 = slots[i]
-		var rects: Array[Rect2] = RET.corner_rects(pane)
-		if rects.size() != 8:
-			ok_arms = false
+		var box: Rect2 = GEO.rest_box(pane)
+		if not pane.encloses(box):
+			ok_inside = false
+		var polys: Array[PackedVector2Array] = RET.corner_polygons(box)
+		if polys.size() != 4:
+			ok_corners = false
+			continue
 		var union := Rect2()
-		for k in rects.size():
-			var r: Rect2 = rects[k]
-			union = r if k == 0 else union.merge(r)
-			if r.intersects(pane):
-				ok_outside = false
-			for j in slots.size():
-				if j != i and r.intersects(slots[j]):
-					ok_gap = false
-			if not (is_equal_approx(minf(r.size.x, r.size.y), RET.THICKNESS)):
+		for k in 4:
+			var pb := Rect2(polys[k][0], Vector2.ZERO)
+			for pt in polys[k]:
+				pb = pb.expand(pt)
+			union = pb if k == 0 else union.merge(pb)
+			if not near(pb.size.x, RET.ARM, 0.01) or not near(pb.size.y, RET.ARM, 0.01):
 				ok_arms = false
-		if not union.is_equal_approx(pane.grow(RET.OUTSET + RET.THICKNESS)):
-			ok_arms = false
-	check(ok_arms, "eight corner rects, 0.75 thick, whose union is the pane grown by 0.5 + 0.75 (all 34)")
-	check(ok_outside, "the bracket never touches its own pane's picture (all 34)")
-	check(ok_gap, "...nor any other pane: it lives in the gap between panes (all 34)")
-	var one: Array[Rect2] = RET.corner_rects(slots[0])
-	check(near(one[0].size.x, slots[0].size.x * RET.ARM_FRACTION + RET.THICKNESS), "an arm is a quarter of the pane's width (plus the corner)")
-	var wide: Array[Rect2] = RET.corner_rects(slots[0], 2.0)
-	check(wide[0].position.x < one[0].position.x and wide[0].position.y < one[0].position.y, "a punch spreads the bracket outward")
+		if not union.is_equal_approx(box):
+			ok_corners = false
+		for c in RET.arm_centers(box):
+			var inside := false
+			for poly in polys:
+				if Geometry2D.is_point_in_polygon(c, poly):
+					inside = true
+			if not inside:
+				ok_arms = false
+		var middle := box.get_center()
+		for poly in polys:
+			if Geometry2D.is_point_in_polygon(middle, poly):
+				ok_open = false
+	check(ok_inside, "the bracket's outer box is inside its pane (all 34): it covers the corners of the picture")
+	check(ok_corners, "four corners whose union is the box, on every pane")
+	check(ok_arms and RET.arm_centers(GEO.rest_box(slots[0])).size() == 8, "each corner is an L of %.0f units each way, and the middle of every arm is red" % RET.ARM)
+	check(ok_open, "the bracket is open: the middle of the pane is not covered")
+	var box0: Rect2 = GEO.rest_box(slots[0])
+	var tl: PackedVector2Array = RET.corner_polygons(box0)[0]
+	check(not Geometry2D.is_point_in_polygon(box0.position + Vector2(0.2, 0.2), tl) and Geometry2D.is_point_in_polygon(box0.position + Vector2(RET.RADIUS, RET.RADIUS) * 0.75, tl), "the outer corner is rounded; the inner corner is square")
+	check(near(RET.THICK, 4.5) and near(RET.ARM, 11.0) and near(box0.size.x, 30.5) and near(box0.size.y, 39.0), "measured: arms 11 long, 4.5 thick, a 30.5 x 39.0 box on a 32.75 x 41.5 pane")
+	var peak_box: Rect2 = GEO.pulse_box(slots[0], 1.0)
+	check(near(peak_box.size.x, 31.75) and near(peak_box.size.y, 41.0) and GEO.pulse_box(slots[0], 0.0).is_equal_approx(box0), "at the top of the idle pulse the box is 31.75 x 41.0; at rest 30.5 x 39.0")
+	# the idle pulse
+	var T: float = SS.PULSE_PERIOD
+	check(near(T, 59.0 / 60.0) and SS.pulse(0.0) == 0.0 and SS.pulse(0.3) == 0.0 and SS.pulse(-1.0) == 0.0, "the pulse is a 59-frame cycle and the box rests for the first half second after it lands")
+	check(near(SS.pulse(SS.PULSE_PEAK), 1.0) and SS.pulse(SS.PULSE_PEAK - 0.1) > 0.0 and SS.pulse(SS.PULSE_PEAK - 0.1) < 1.0 and SS.pulse(SS.PULSE_PEAK + 0.1) < 1.0, "it swells to its peak %.2f s after the landing and falls again" % SS.PULSE_PEAK)
+	check(near(SS.pulse(SS.PULSE_PEAK + T), 1.0) and near(SS.pulse(SS.PULSE_PEAK + 5.0 * T), 1.0) and SS.pulse(T + 0.2) == 0.0, "...and does it again every 59 frames, resting in between")
+	check(near(SS.pulse(SS.PULSE_FALL_END - 0.001), 0.0, 0.01) and SS.pulse(T + (SS.PULSE_FALL_END - T) * 0.5) > 0.0, "(a fall runs a little into the next period)")
 	var ret = RET.new(layout)
 	check(not ret.visible and ret.target == 0 and not ret.has_content(), "no target: no reticle")
 	ret.set_target(5)
-	check(ret.visible and ret.target == 5 and ret.persistent_visible() and ret.pulses.is_empty(), "a target shows the bracket on its pane; moving to a pane does not punch (a KO re-target is a plain move)")
-	ret.set_target(7)
-	check(ret.target == 7 and ret.pulses.is_empty(), "the bracket moves at once to the next pane")
-	ret.pulse()
-	check(ret.pulses.has(7) and RET.pulse_amount(0.0) == 1.0, "a mode change punches the current pane")
+	check(ret.visible and ret.target == 5 and ret.persistent_visible() and ret.age == 0.0, "a target shows the bracket on its pane and starts its idle cycle")
 	ret.advance(0.0)
-	check(is_equal_approx(float(ret.pulses[7]), 0.0), "paused time does not advance the punch")
-	ret.advance(RET.PULSE_SECONDS + 0.1)
-	check(ret.pulses.is_empty() and RET.pulse_amount(RET.PULSE_SECONDS + 0.1) == 0.0, "the punch is over in %.1f s" % RET.PULSE_SECONDS)
+	check(ret.age == 0.0, "paused time does not advance the pulse")
+	ret.advance(0.4)
+	check(near(ret.age, 0.4), "the idle clock follows the screen's")
+	ret.set_target(7)
+	check(ret.target == 7 and ret.age == 0.0 and not ("pulses" in ret) and not ret.has_method("pulse") and not ret.has_method("pulse_at"), "the bracket moves at once to the next pane and starts its cycle again; there is no punch (nothing happens when it lands)")
+	ret.advance(0.9)
+	ret.set_target(7)
+	check(near(ret.age, 0.9), "asking for the same pane again does nothing")
+	check(ret.persistent_box(7, 0.0).is_equal_approx(GEO.rest_box(slots[6])) and ret.persistent_box(7, SS.PULSE_PEAK).is_equal_approx(GEO.pulse_box(slots[6], 1.0)), "the persistent box follows the pulse")
 	# the send
 	var flying: Array[Dictionary] = [{"seq": 4, "target": 12, "progress": 0.3, "cut": false, "fade": 1.0}]
 	ret.sync_flights(flying)
 	check(ret.flying.size() == 1 and not ret.persistent_visible() and ret.visible and ret.target == 7, "a send in the air: the bracket is the one flying, the persistent one is not drawn")
-	ret.sync_flights(flying)
-	check(ret.landed.is_empty() and ret.pulses.is_empty(), "nothing lands while it is still in the air")
+	ret.advance(1.0)
+	check(near(ret.age, 0.9), "(the idle clock does not run while it is hidden)")
 	ret.sync_flights([] as Array[Dictionary])
-	check(ret.landed == [12] and ret.pulses.has(12) and ret.persistent_visible(), "when it is gone it has landed: its pane punches, and the persistent bracket is back")
-	ret.sync_flights([] as Array[Dictionary])
-	check(ret.landed.is_empty(), "(a landing is reported once)")
-	var cutting: Array[Dictionary] = [{"seq": 5, "target": 9, "progress": 0.5, "cut": true, "fade": 0.5}]
-	ret.sync_flights(cutting)
-	ret.sync_flights([] as Array[Dictionary])
-	check(ret.landed.is_empty() and not ret.pulses.has(9), "a flight whose recipient went out is cut: it never lands, and nothing punches")
+	check(ret.flying.is_empty() and ret.persistent_visible() and ret.age == 0.0, "when it is gone the persistent bracket is back and its cycle starts at the landing")
 	ret.sync_flights(flying)
 	ret.clear()
-	check(not ret.visible and ret.target == 0 and ret.flying.is_empty() and ret.pulses.is_empty() and not ret.has_content(), "clearing the reticle leaves nothing: no bracket, no flight, no punch")
+	check(not ret.visible and ret.target == 0 and ret.flying.is_empty() and not ret.has_content(), "clearing the reticle leaves nothing: no bracket, no flight")
 	ret.set_target(0)
 	check(not ret.visible, "no target hides it")
 	ret.set_target(-1)
@@ -259,35 +280,46 @@ func test_reticle() -> void:
 	check(RET.COLOR.r > 225.0 / 255.0 and RET.COLOR.g < 50.0 / 255.0 and RET.COLOR.b < 70.0 / 255.0, "it is the reference's pure red (r>225, g<50, b<70)")
 	ret.free()
 
-# ---- what is no longer drawn ---------------------------------------------------------------------------------
+# ---- what is no longer drawn, and the lines that are --------------------------------------------------------------
+
+## Makes `bot` aim at `target` (the session logs TARGET_CHANGED, which is all a line needs), whatever it aimed at before.
+func aim(s, bot: int, target: int) -> void:
+	if s.contestants[bot].target_id == target:
+		s.attacks.set_target(s, bot, 3 if target != 3 else 4)
+	s.attacks.set_target(s, bot, target)
 
 func test_attack_visuals_removed() -> void:
-	print("-- the old attack effects are gone (doc 51)")
+	print("-- the old attack effects are gone (doc 51) and a line belongs to an opponent that aims at the player (doc 54)")
 	var LAYER = load("res://Scripts/Classes/Battle/BattleAttackLayer.gd")
-	var s = make_session(0)
+	var s = make_session(9) # everybody's sends go to contestant 9
 	var pres = P.new(s)
 	s.report_enemy_defeat(0, 1) # the player's send: the reticle flies, no line
-	s.report_enemy_defeat(5, 1) # bot to bot (at the player: the policy sends everything at 0, so use another session below)
+	s.report_enemy_defeat(5, 1) # a bot's send at contestant 9
 	pres.update(0.0)
-	check(LAYER.drawn_flights(null).is_empty(), "no presentation, no lines")
-	var only_lines := true
-	for f in LAYER.drawn_flights(pres):
-		if f.target != 0 or f.sender == 0:
-			only_lines = false
-	check(only_lines, "the layer draws only a bot's send at the player")
+	check(LAYER.drawn_lines(null).is_empty(), "no presentation, no lines")
+	check(LAYER.drawn_lines(pres).is_empty() and not pres.watch_out(), "sends, the player's or a bot's, draw no line and no WATCH OUT!: the line is the aim, not the send")
+	var sp = make_session(0) # everybody's sends go to the player
+	var pp = P.new(sp)
+	sp.report_enemy_defeat(5, 1)
+	pp.update(0.0)
+	var only_aimers := true
+	for l in LAYER.drawn_lines(pp):
+		if pp.target_of(int(l.sender)) != 0:
+			only_aimers = false
+	check(pp.player_incoming().size() == 1 and only_aimers, "a bot's send at the player is an icon in the bar; a line exists only for a bot whose target IS the player")
 	var s2 = make_session(9)
 	var p2 = P.new(s2)
 	s2.report_enemy_defeat(3, 1)
 	s2.report_enemy_defeat(4, 2)
 	p2.update(0.0)
-	check(p2.flights.is_empty() and LAYER.drawn_flights(p2).is_empty(), "bot-to-bot sends are neither flights nor lines")
-	var mine = make_session(0)
-	var p3 = P.new(mine)
-	mine.report_enemy_defeat(6, 1)
+	check(p2.flights.is_empty() and LAYER.drawn_lines(p2).is_empty(), "bot-to-bot sends are neither flights nor lines")
+	var s3 = make_session(0)
+	var p3 = P.new(s3)
+	aim(s3, 6, 0)
 	p3.update(0.0)
-	check(LAYER.drawn_flights(p3).size() == 1 and LAYER.drawn_flights(p3)[0].sender == 6, "a bot's send at the player is one line, from that bot")
+	check(LAYER.drawn_lines(p3).size() == 1 and LAYER.drawn_lines(p3)[0].sender == 6, "a bot that aims at the player is one line, from that bot")
 	var layer = LAYER.new(layout)
-	for gone in ["_draw_target", "_draw_flight", "_draw_piece"]:
+	for gone in ["_draw_target", "_draw_flight", "_draw_piece", "_draw_line"]:
 		check(not layer.has_method(gone), "the layer has no %s any more (gold line, target tint, frame flash, launch ring)" % gone)
 	check(not ("assets" in layer), "and it carries no enemy art (no enemy rides a line)")
 	var pane = PANE.new(3, null)
@@ -302,6 +334,61 @@ func test_attack_visuals_removed() -> void:
 	layer.free()
 	pane.free()
 
+func test_lines() -> void:
+	print("-- the attacker lines and WATCH OUT! (doc 54: measured at 60 fps)")
+	var GEO = load("res://Scripts/Classes/Battle/BattleAttackGeometry.gd")
+	var LAYER = load("res://Scripts/Classes/Battle/BattleAttackLayer.gd")
+	var s = make_session(0)
+	var pres = P.new(s)
+	check(pres.lines().is_empty() and not pres.watch_out() and pres.watch_out_age() == -1.0, "nobody aims at the player: no line, no WATCH OUT!")
+	check(near(P.LINE_SECONDS, 0.25) and near(P.LINE_SECONDS * 60.0, 15.0), "a line's head takes 15 frames (0.25 s) to reach the pill")
+	aim(s, 6, 0)
+	pres.update(0.0)
+	var ls: Array[Dictionary] = pres.lines()
+	check(ls.size() == 1 and ls[0].sender == 6 and ls[0].progress == 0.0 and pres.watch_out() and near(pres.watch_out_age(), 0.0), "a bot that starts aiming at the player: its line starts at its pane and WATCH OUT! appears at once")
+	pres.update(P.LINE_SECONDS * 0.5)
+	check(near(pres.lines()[0].progress, 0.5) and near(pres.watch_out_age(), P.LINE_SECONDS * 0.5), "the head moves at constant speed: half the time, half the way")
+	pres.update(P.LINE_SECONDS * 0.5)
+	check(near(pres.lines()[0].progress, 1.0), "...and is at the pill after 0.25 s")
+	pres.update(30.0)
+	check(near(pres.lines()[0].progress, 1.0) and pres.watch_out(), "the line then stays for as long as the bot aims at the player (30 s later it is still there)")
+	var born_age: float = pres.watch_out_age()
+	aim(s, 20, 0)
+	pres.update(0.0)
+	check(pres.lines().size() == 2 and pres.lines()[0].sender == 6 and pres.lines()[1].progress == 0.0 and near(pres.watch_out_age(), born_age), "a second bot aiming at the player is a second line; the pill keeps its age (it is one pill)")
+	aim(s, 6, 9)
+	pres.update(0.0)
+	check(pres.lines().size() == 1 and pres.lines()[0].sender == 20 and pres.watch_out(), "when a bot re-targets its line goes that frame; the pill stays while one line is left")
+	s.attacks.set_target(s, 20, -1) # what a KO does: the session logs the target as gone
+	pres.update(0.0)
+	check(pres.lines().is_empty() and not pres.watch_out() and pres.watch_out_age() == -1.0, "a knocked-out opponent's line goes with it, and with the last line WATCH OUT! goes")
+	aim(s, 7, 0)
+	pres.update(0.0)
+	pres.update(1.0)
+	check(near(pres.watch_out_age(), 1.0), "a pill after a gap has its own clock")
+	var ign = make_session(0)
+	var pi = P.new(ign)
+	ign.attacks.set_target(ign, 0, 5) # the player's own aim is nobody's line
+	pi.update(0.0)
+	check(pi.lines().is_empty(), "the player's own target changes are not lines")
+	var s3 = make_session(0)
+	aim(s3, 2, 0)
+	var late = P.new(s3) # made mid-round: what already happened is replayed silently
+	check(late.lines().is_empty() and not late.watch_out(), "a presentation made mid-round does not replay an old line")
+	pres.clear_flights()
+	check(pres.lines().is_empty() and not pres.watch_out(), "ending the round clears the lines")
+	# geometry: from the pane's middle to the pill's near edge, on the sender's side
+	var pill: Rect2 = layout.pill
+	check(near(pill.position.x, 189.5) and near(pill.end.x, 290.5) and near(pill.position.y, 248.75) and near(pill.size.y, 13.0), "the pill is where the reference has it: x 189.5..290.5, y 248.75..261.75")
+	var left_end: Vector2 = GEO.landing_point(layout, 6, 0)
+	var right_end: Vector2 = GEO.landing_point(layout, 20, 0)
+	check(layout.slots[5].get_center().x < 240.0 and layout.slots[19].get_center().x > 240.0, "(contestant 6 is in the left panel, 20 in the right)")
+	check(near(left_end.x, 189.5) and near(right_end.x, 290.5) and near(left_end.y, 253.75) and near(right_end.y, 253.75), "a line from the left panel ends on the pill's left edge, one from the right panel on its right edge, at y 253.75")
+	check(GEO.launch_point(layout, 20, 0) == layout.slots[19].get_center(), "it starts at the middle of the sender's pane")
+	var head: Vector2 = LAYER.head_of(layout, 20, 0.5)
+	check(head.is_equal_approx((GEO.launch_point(layout, 20, 0) + right_end) / 2.0) and LAYER.head_of(layout, 20, 0.0) == GEO.launch_point(layout, 20, 0) and LAYER.head_of(layout, 20, 1.0).is_equal_approx(right_end), "the head moves along the line linearly")
+	check(near(LAYER.LINE_WIDTH, 0.65), "the line is 2.5 device px thick (0.65 units)")
+
 # ---- the incoming bar -----------------------------------------------------------------------------------------------------
 
 func item(phase: int, seq: int, extra := {}) -> Dictionary:
@@ -310,28 +397,36 @@ func item(phase: int, seq: int, extra := {}) -> Dictionary:
 	return d
 
 func test_incoming_bar_placement() -> void:
-	print("-- the incoming bar: where icons are")
+	print("-- the incoming bar: where icons are (doc 54: measured at 60 fps)")
 	var w: float = layout.strip_a.size.x
 	var b: float = STRIP.gold_end(w)
-	check(near(b, w / 3.0) and near(STRIP.ORANGE_FRACTION, 2.0 / 3.0) and STRIP.TEETH == 3, "the bar is gold for the left third, orange for the next third, darker orange after it, with 3-tooth boundaries")
+	check(near(b, 91.1, 0.2) and near(STRIP.orange_end(w), 176.5, 0.2), "the boundaries are where the reference has them: x 202.6 and 288.0 on the canvas (%.1f, %.1f in the strip)" % [b, STRIP.orange_end(w)])
+	check(STRIP.ZONE_GOLD == Color8(255, 189, 9) and STRIP.ZONE_ORANGE == Color8(255, 118, 0) and STRIP.ZONE_DARK == Color8(245, 85, 17), "the zones are the reference's flat gold, orange and darker orange")
 	var pts: PackedVector2Array = STRIP.jagged(b, 12.0)
-	check(pts.size() == 7 and pts[0].y == 0.0 and pts[6].y == 12.0 and near(pts[1].x, b + STRIP.TOOTH_DEPTH) and near(pts[0].x, b) and near(pts[2].x, b) and near(pts[5].x, b + STRIP.TOOTH_DEPTH), "a jagged boundary is a zig-zag of three teeth over the bar's height")
+	var lo := 1.0e9
+	var hi := -1.0e9
+	for pt in pts:
+		lo = minf(lo, pt.x)
+		hi = maxf(hi, pt.x)
+	check(pts.size() == 5 and pts[0].y == 0.0 and pts[4].y == 12.0 and near(hi - lo, STRIP.TOOTH_DEPTH, 0.2) and near((hi + lo) / 2.0, b, 0.2), "a jagged boundary is a zig-zag of two teeth, %.1f units deep, centred on the boundary" % STRIP.TOOTH_DEPTH)
 	var entry: float = STRIP.entry_x(w)
 	var slot0: float = b + STRIP.WAIT_OFFSET
-	# one icon in the air, then landed and travelling, then waiting
-	var xs: PackedFloat32Array = STRIP.place_all([item(Phase.QUEUED, 1, {"in_transit": true})], w)
-	check(near(xs[0], entry), "an attack whose line is still in the air waits at the bar's right end (%.1f)" % xs[0])
+	check(near(STRIP.ICON_W, 8.0) and near(STRIP.PITCH, 10.8), "an icon is a bare 8-unit sprite; waiting icons stand 10.8 apart")
 	var travel: float = STRIP.TRAVEL_SECONDS
-	check(near(travel, 3.0 - F.DURATION), "an icon takes the attack system's activation delay, counted from the send, to reach the boundary (%.2f s after it lands)" % travel)
-	xs = STRIP.place_all([item(Phase.QUEUED, 1, {"age": 0.0})], w)
-	check(near(xs[0], entry), "a just-landed icon starts at the right end")
-	xs = STRIP.place_all([item(Phase.QUEUED, 1, {"age": travel / 2.0})], w)
-	check(near(xs[0], (entry + slot0) / 2.0), "half the time later it is half way to the boundary")
+	check(near(travel, 3.0), "an icon takes the attack system's activation delay (3 s), counted from the send, to reach the boundary")
+	var speed: float = STRIP.travel_speed(w)
+	check(near(speed, (entry - slot0) / 3.0) and speed > 40.0 and speed < 60.0, "...which is a constant %.0f units/s (the reference's is 47)" % speed)
+	var xs: PackedFloat32Array = STRIP.place_all([item(Phase.QUEUED, 1, {"age": 0.0})], w)
+	check(near(xs[0], entry), "a just-sent icon starts at the right end")
+	var x1: float = STRIP.place_all([item(Phase.QUEUED, 1, {"age": 0.5})], w)[0]
+	var x2: float = STRIP.place_all([item(Phase.QUEUED, 1, {"age": 1.0})], w)[0]
+	var x3: float = STRIP.place_all([item(Phase.QUEUED, 1, {"age": 2.0})], w)[0]
+	check(near(entry - x1, speed * 0.5, 0.01) and near(x1 - x2, speed * 0.5, 0.01) and near(x2 - x3, speed, 0.01), "it moves the same distance in the same time: no easing")
 	xs = STRIP.place_all([item(Phase.QUEUED, 1, {"age": travel * 3.0})], w)
 	check(near(xs[0], slot0) and xs[0] > b, "it stops at the boundary's right side and waits there")
 	xs = STRIP.place_all([item(Phase.ARRIVING, 1, {"age": 0.5, "waited": 1.0, "state": 1})], w)
 	check(near(xs[0], slot0), "an ACTIVE icon that is not at the boundary yet is there within %.1f s of becoming ACTIVE" % STRIP.CATCH_UP_SECONDS)
-	# several: order, spacing, crossing
+	# several: order, spacing
 	var many: Array[Dictionary] = []
 	for k in 6:
 		many.append(item(Phase.QUEUED, k, {"age": 0.4 * (6 - k)}))
@@ -345,31 +440,33 @@ func test_incoming_bar_placement() -> void:
 	for k in 4:
 		many.append(item(Phase.ARRIVING, k, {"age": 9.0, "waited": 5.0}))
 	xs = STRIP.place_all(many, w)
-	check(near(xs[1] - xs[0], STRIP.PITCH) and near(xs[3] - xs[0], 3.0 * STRIP.PITCH), "icons waiting at the boundary stand %.0f px apart" % STRIP.PITCH)
-	# in the level: the gold zone
-	xs = STRIP.place_all([item(Phase.IN_LEVEL, 1, {"arrive": 0.0, "age": 9.0, "waited": 9.0}), item(Phase.IN_LEVEL, 2, {"arrive": 0.0})], w)
-	check(near(xs[0], STRIP.IN_LEVEL_X0) and near(xs[1], STRIP.IN_LEVEL_X0 + STRIP.PITCH) and xs[1] < b, "an enemy in the level is a marker in the gold zone, in send order")
+	check(near(xs[1] - xs[0], STRIP.PITCH) and near(xs[3] - xs[0], 3.0 * STRIP.PITCH), "icons waiting at the boundary stand %.1f units apart" % STRIP.PITCH)
+	# in the level: across the boundary, then gone
 	xs = STRIP.place_all([item(Phase.IN_LEVEL, 1, {"arrive": 1.0})], w)
-	check(near(xs[0], b), "the moment it appears in the level its icon is at the gold boundary (the release), then moves into the gold zone")
-	xs = STRIP.place_all([item(Phase.IN_LEVEL, 1, {"arrive": 0.5})], w)
-	check(xs[0] > b - 0.001 and xs[0] < STRIP.IN_LEVEL_X0 + 0.001 or xs[0] > STRIP.IN_LEVEL_X0 - 0.001 and xs[0] < b, "...half way through it is between the two")
-	# ghosts keep the slot of the phase they were in
-	var merged: Array[Dictionary] = STRIP.merged([item(Phase.ARRIVING, 5, {"age": 9.0, "waited": 4.0})] as Array[Dictionary],
-		[{"seq": 3, "kind": 1, "cause": 0, "spawned": true, "fade": 0.5}, {"seq": 4, "kind": 1, "cause": 0, "spawned": false, "fade": 0.5}] as Array[Dictionary])
-	check(merged.size() == 3 and int(merged[0].seq) == 3 and merged[0].get("ghost", false) and int(merged[2].seq) == 5, "a fading icon is merged in send order, and is marked as a ghost")
-	xs = STRIP.place_all(merged, w)
-	check(near(xs[0], STRIP.IN_LEVEL_X0) and near(xs[1], slot0) and near(xs[2], slot0 + STRIP.PITCH), "a fading icon keeps the place it had (the gold zone if its enemy was in the level, else the waiting slots)")
+	check(near(xs[0], slot0) and STRIP.crossed(item(Phase.IN_LEVEL, 1, {"arrive": 1.0})) == 0.0, "the moment its enemy appears in the level its icon is where it waited")
+	var run: float = STRIP.WAIT_OFFSET / STRIP.CROSS_SPEED
+	var half := item(Phase.IN_LEVEL, 1, {"arrive": 1.0 - (run * 0.5) / P.SPAWN_FLASH})
+	check(near(STRIP.crossed(half), 0.5, 0.01) and near(STRIP.place_all([half], w)[0], (slot0 + b) / 2.0, 0.05), "it runs on across the boundary at the travel speed...")
+	var gone := item(Phase.IN_LEVEL, 1, {"arrive": 1.0 - (run * 1.2) / P.SPAWN_FLASH})
+	check(STRIP.crossed(gone) == 1.0 and near(STRIP.place_all([gone], w)[0], b), "...and when it reaches the boundary it is gone (not drawn): the reference leaves no marker, no flash")
+	var inst = STRIP.new(null)
+	check(not inst.has_method("_boundary_flash") and not inst.has_method("_ghost") and not inst.has_method("_dotted") and not STRIP.get_script_constant_map().has("IN_LEVEL_X0"), "no hollow place-holder, no gold-zone marker, no fading ghost, no boundary flash any more")
+	inst.free()
+	# a fading ghost is no longer a thing the bar draws
+	var rows_only: Array[Dictionary] = STRIP.merged([item(Phase.ARRIVING, 5, {"age": 9.0, "waited": 4.0})] as Array[Dictionary],
+		[{"seq": 3, "kind": 1, "cause": 0, "spawned": true, "fade": 0.5}] as Array[Dictionary])
+	check(rows_only.size() == 1 and int(rows_only[0].seq) == 5, "an attack that ended leaves the bar at once: its fading ghost is not drawn")
 	# everything stays inside the bar
 	var crowd: Array[Dictionary] = []
 	for k in 30:
-		crowd.append(item(Phase.IN_LEVEL if k < 10 else Phase.ARRIVING, k, {"age": 99.0, "waited": 99.0}))
+		crowd.append(item(Phase.ARRIVING, k, {"age": 99.0, "waited": 99.0}))
 	xs = STRIP.place_all(crowd, w)
 	var inside := true
 	for x in xs:
 		if x < 0.0 or x > w:
 			inside = false
 	check(inside, "even a crowd of 30 stays inside the bar")
-	check(STRIP.progress_of(item(Phase.QUEUED, 1, {"in_transit": true, "age": 5.0})) == 0.0 and STRIP.progress_of(item(Phase.QUEUED, 1, {"age": travel})) == 1.0, "an icon in the air has gone nowhere; one that landed a travel time ago has gone all the way")
+	check(STRIP.progress_of(item(Phase.QUEUED, 1, {"age": 0.0})) == 0.0 and STRIP.progress_of(item(Phase.QUEUED, 1, {"age": travel})) == 1.0, "an icon that was just sent has gone nowhere; one sent a travel time ago has gone all the way")
 
 func test_incoming_bar_phase_mapping() -> void:
 	print("-- the incoming bar: phases follow the authoritative state")
@@ -378,15 +475,13 @@ func test_incoming_bar_phase_mapping() -> void:
 	var a = s.report_enemy_defeat(4, 1)
 	pres.update(0.0)
 	var row: Dictionary = pres.player_incoming()[0]
-	check(a != null and row.seq == a.seq and row.phase == Phase.QUEUED and row.in_transit and row.waited < 0.0, "a bot's send at the player is a QUEUED icon whose line is in the air")
+	check(a != null and row.seq == a.seq and row.phase == Phase.QUEUED and not row.in_transit and row.age == 0.0 and row.waited < 0.0, "a bot's send at the player is a QUEUED icon at once: it enters the bar at the moment of the send")
 	var w: float = layout.strip_a.size.x
 	check(near(STRIP.place_all([row], w)[0], STRIP.entry_x(w)), "...at the bar's right end")
-	pres.update(F.DURATION + 0.05)
-	row = pres.player_incoming()[0]
-	check(row.phase == Phase.QUEUED and not row.in_transit and row.age > 0.0 and row.age < 0.2, "when the line lands the icon starts its trip (%.2f s)" % row.age)
 	pres.update(1.0)
-	var mid: float = STRIP.place_all([pres.player_incoming()[0]], w)[0]
-	check(mid < STRIP.entry_x(w) and mid > STRIP.gold_end(w) + STRIP.WAIT_OFFSET, "a second on it is on its way (x %.1f)" % mid)
+	row = pres.player_incoming()[0]
+	var mid: float = STRIP.place_all([row], w)[0]
+	check(near(row.age, 1.0) and mid < STRIP.entry_x(w) and mid > STRIP.gold_end(w) + STRIP.WAIT_OFFSET and near(STRIP.entry_x(w) - mid, STRIP.travel_speed(w), 0.01), "a second on it is on its way (x %.1f, one second's travel)" % mid)
 	for i in 3:
 		s.step()
 	pres.update(0.0)
@@ -397,15 +492,15 @@ func test_incoming_bar_phase_mapping() -> void:
 	check(s.report_player_incoming_spawned(a.seq), "(the real game puts the enemy in the level)")
 	pres.update(0.0)
 	row = pres.player_incoming()[0]
-	check(row.phase == Phase.IN_LEVEL and row.arrive > 0.9, "the icon becomes IN_LEVEL and flashes")
-	pres.update(1.0)
-	var gold_x: float = STRIP.place_all([pres.player_incoming()[0]], w)[0]
-	check(near(gold_x, STRIP.IN_LEVEL_X0) and gold_x < STRIP.gold_end(w), "and settles in the gold zone")
+	check(row.phase == Phase.IN_LEVEL and row.arrive > 0.9 and STRIP.crossed(row) < 0.1, "the icon becomes IN_LEVEL and starts across the boundary")
+	pres.update(0.5)
+	row = pres.player_incoming()[0]
+	check(STRIP.crossed(row) == 1.0, "half a second later it has crossed and is gone from the bar (its attack is still in the list: the session's queue is unchanged)")
 	check(s.resolve_player_incoming(a.seq, A.Resolution.DEFEATED_BY_PLAYER), "(the player defeats it)")
 	pres.update(0.0)
-	check(pres.player_incoming().is_empty() and pres.player_resolved().size() == 1 and pres.player_resolved()[0].spawned, "the icon leaves the list and fades where it was")
+	check(pres.player_incoming().is_empty() and pres.player_resolved().size() == 1 and pres.player_resolved()[0].spawned, "the attack leaves the list (the strip draws no fading ghost for it)")
 	pres.update(P.RESOLVE_FADE + 0.1)
-	check(pres.player_resolved().is_empty(), "...and is gone")
+	check(pres.player_resolved().is_empty(), "...and its record is gone")
 	# a bar for the same attacks, drawn as a whole, is the same list as the session's: one icon per seq, in order
 	var s2 = make_session(0)
 	var pres2 = P.new(s2)
@@ -424,53 +519,32 @@ func test_incoming_bar_phase_mapping() -> void:
 	check(strip.rows.size() == 5 and strip.counts == Vector2i(5, 0) and strip.phases == Vector3i(5, 0, 0), "a strip bound to it shows 5 queued icons")
 	strip.free()
 
-# ---- WATCH OUT! and the eye counter --------------------------------------------------------------------------------------------
+# ---- the WATCH OUT! pill ---------------------------------------------------------------------------------------------------
 
 func test_watch_out_and_status() -> void:
-	print("-- WATCH OUT! and the eye counter")
-	var s = make_session(0)
-	var pres = P.new(s)
-	check(not pres.watch_out(), "nothing aimed at the player: no WATCH OUT!")
-	s.report_enemy_defeat(3, 1)
-	pres.update(0.0)
-	check(pres.watch_out(), "a bot sends an enemy at the player: WATCH OUT! shows at once")
-	pres.update(F.DURATION + P.WATCH_OUT_HOLD - 0.1)
-	check(pres.watch_out(), "...through the flight and for about a second after the line lands")
-	pres.update(0.2)
-	check(not pres.watch_out(), "...then it goes (%.2f s after the send)" % pres.clock)
-	s.report_enemy_defeat(5, 2)
-	pres.update(0.0)
-	var until: float = pres.clock
-	pres.update(0.5)
-	s.report_enemy_defeat(6, 1)
-	pres.update(0.0)
-	pres.update(F.DURATION + P.WATCH_OUT_HOLD - 0.05)
-	check(pres.watch_out() and pres.clock > until + F.DURATION + P.WATCH_OUT_HOLD - 0.1, "a second send while it shows extends it")
-	pres.update(0.2)
-	check(not pres.watch_out(), "...and it ends once the last one has been up for the hold")
-	var s2 = make_session(9)
-	var pres2 = P.new(s2)
-	s2.report_enemy_defeat(0, 1)
-	s2.report_enemy_defeat(4, 1)
-	pres2.update(0.0)
-	check(not pres2.watch_out(), "the player's own sends and bots' sends at other bots never show it")
-	var s3 = make_session(0)
-	s3.report_enemy_defeat(2, 1)
-	var late = P.new(s3) # made mid-round: what already happened is replayed silently
-	check(not late.watch_out(), "a presentation made mid-round does not replay an old WATCH OUT!")
-	# the strip's state
+	print("-- the WATCH OUT! pill (doc 54: a white flash that decays, every 59 frames; no eye counter)")
 	var strip = STATUS.new(null)
-	check(strip.eye == -1 and not strip.watch_out, "the status strip starts empty (no eye counter without the attack loop, no pill)")
-	strip.set_eye(3)
-	strip.set_watch_out(true)
-	check(strip.eye == 3 and strip.watch_out and strip.age == 0.0, "the eye shows a count; the pill appears with its pop")
-	strip.advance(0.0)
-	check(strip.age == 0.0, "paused time holds the pop")
-	strip.advance(1.0)
-	check(STATUS.pop_scale(strip.age) == 1.0 and STATUS.pop_scale(0.0) < 0.7 and STATUS.pop_scale(STATUS.POP_SECONDS * 0.5) > 0.9, "the pill pops in and settles at full size")
-	strip.set_watch_out(true)
-	check(strip.age >= STATUS.POP_SECONDS, "asking for the same state again does not restart the pop")
-	check(near(STATUS.PILL_LOCAL.position.x + 111.5, 185.5, 0.6) and near(STATUS.PILL_LOCAL.end.x + 111.5, 289.5, 0.6), "the pill sits at the reference's x 185..290")
+	check(not strip.is_showing() and strip.pill_age == -1.0, "the status strip starts empty (no pill)")
+	check(not ("eye" in strip) and not strip.has_method("set_eye") and not strip.has_method("_eye"), "there is no eye counter: the reference shows none while lines are up (t=600, 745, 870, 892, 905)")
+	strip.set_pill(0.0)
+	check(strip.is_showing() and strip.pill_age == 0.0, "the pill appears when it is told its age")
+	strip.set_pill(-3.0)
+	check(not strip.is_showing() and strip.pill_age == -1.0, "a negative age hides it")
+	check(near(STATUS.FLASH_PERIOD, 59.0 / 60.0), "the white flash comes round every 59 frames")
+	check(STATUS.flash_alpha(-1.0) == 0.0 and STATUS.flash_alpha(0.0) == 1.0 and STATUS.flash_alpha(0.9 / 60.0) == 1.0, "the pill's first frame is solid white")
+	var fell := true
+	var last := 2.0
+	for f in range(1, 9):
+		var al: float = STATUS.flash_alpha(float(f) / 60.0)
+		if al >= last:
+			fell = false
+		last = al
+	check(fell and near(STATUS.flash_alpha(1.0 / 60.0), 0.97, 0.01) and near(STATUS.flash_alpha(2.0 / 60.0), 0.825, 0.01) and STATUS.flash_alpha(8.0 / 60.0) == 0.0, "then it falls in a straight line, 0.145 a frame, and is gone by the eighth")
+	check(STATUS.flash_alpha(20.0 / 60.0) == 0.0 and STATUS.flash_alpha(58.0 / 60.0) == 0.0 and STATUS.flash_alpha(STATUS.FLASH_PERIOD) == 1.0 and near(STATUS.flash_alpha(STATUS.FLASH_PERIOD * 3.0 + 2.0 / 60.0), 0.825, 0.01), "...and it comes again every 59 frames while the pill stays")
+	var layers: Array[Rect2] = STATUS.pill_layers(layout.pill)
+	check(layers.size() == 4 and layers[0] == layout.pill and near(layers[1].position.x - layers[0].position.x, 3.0) and near(layers[2].position.x - layers[0].position.x, 6.0) and near(layers[3].position.x - layers[0].position.x, 8.5), "the pill is four layers inward from the ends: crimson, orange, the red ring and the black plate (3, 6 and 8.5 units in)")
+	check(near(layers[3].position.y - layers[0].position.y, 1.25) and near(layers[1].size.y, layers[0].size.y) and near(layers[2].size.y, layers[0].size.y), "...the stripes as tall as the pill, the plate 1.25 inside the ring")
+	check(STATUS.CRIMSON == Color8(225, 48, 55) and STATUS.ORANGE == Color8(255, 95, 0) and STATUS.RED == Color8(255, 0, 0) and STATUS.BLACK == Color8(0, 0, 0) and STATUS.YELLOW == Color8(255, 248, 0), "the reference's colours")
 	check(not ("chest" in strip) and not ("bonus" in strip), "there is no chest bonus: its formula is unknown, so nothing stands in for it")
 	strip.free()
 
@@ -517,16 +591,33 @@ func contestant(alive: bool, placement := 0):
 	return c
 
 func test_ko_card() -> void:
-	print("-- the KO card")
-	check(PANE.KO_SECONDS >= 0.7 and PANE.KO_SECONDS <= 0.9, "the animation lasts %.1f s (0.8 +- 0.1)" % PANE.KO_SECONDS)
-	check(PANE.flash_at(0.0) == 1.0 and PANE.flash_at(PANE.FLASH_1_END * 0.99) > 0.25 and PANE.flash_at(PANE.FLASH_1_END + 0.01) == 0.0, "it opens with a white flash that is gone within a tenth of a second")
-	check(PANE.flash_at((PANE.FLASH_2_START + PANE.FLASH_2_END) / 2.0) > 0.0 and PANE.flash_at(PANE.FLASH_2_END + 0.01) == 0.0 and PANE.flash_at(0.3) == 0.0, "a second flash comes at about %.2f s" % PANE.FLASH_2_START)
-	check(PANE.card_scale_at(0.0) == 0.0 and PANE.card_scale_at(PANE.POP_START - 0.001) == 0.0 and PANE.card_scale_at(PANE.POP_END) == 1.0 and PANE.card_scale_at(PANE.KO_SECONDS) == 1.0, "the card is nothing until it pops, and full size once it has")
-	var peak := 0.0
-	for i in 200:
-		peak = maxf(peak, PANE.card_scale_at(PANE.POP_START + (PANE.POP_END - PANE.POP_START) * i / 199.0))
-	check(peak > 1.02 and peak < 1.4, "it overshoots on the way (%.2f)" % peak)
-	check(PANE.puff_progress_at(0.0) < 0.0 and PANE.puff_progress_at(PANE.PUFFS_START) == 0.0 and PANE.puff_progress_at(PANE.PUFFS_END) < 0.0 and PANE.puff_progress_at(0.3) > 0.0, "smoke and the starburst run between their own times")
+	print("-- the KO card (doc 54: measured at 60 fps on t=526.333 and t=518.367)")
+	var f := 1.0 / 60.0
+	check(near(PANE.KO_SECONDS, 0.95, 0.06), "the animation lasts %.2f s (0.95 +- 0.06): the first flash to the card at rest" % PANE.KO_SECONDS)
+	check(PANE.square_side_at(0.0) == 11.0 and PANE.square_side_at(f * 1.1) == 14.5 and PANE.square_side_at(f * 2.1) == 0.0 and PANE.square_side_at(-0.1) == 0.0, "it opens with a white rounded square at the middle: 11 units on the first frame, 14.5 on the second, then the card")
+	check(not PANE.card_visible_at(0.0) and not PANE.card_visible_at(f * 1.5) and PANE.card_visible_at(f * 2.0) and PANE.card_visible_at(PANE.KO_SECONDS), "the blue card is there from the third frame, whole (it does not pop in from nothing)")
+	var b0: Dictionary = PANE.burst_at(f * 2.0)
+	check(near(b0.alpha, 1.0) and PANE.burst_at(f * 1.9).alpha == 0.0 and PANE.burst_at(f * 4.0).alpha > 0.0 and PANE.burst_at(f * 4.0).alpha < 1.0 and PANE.burst_at(PANE.BURST_END).alpha == 0.0, "a white burst covers the card as it appears and has cleared four frames later")
+	var st0: Dictionary = PANE.stars_at(f * 1.0)
+	var st1: Dictionary = PANE.stars_at(0.2)
+	check(PANE.STAR_COUNT == 8 and st0.alpha > 0.9 and st1.radius > st0.radius * 2.0 and PANE.stars_at(0.0).alpha == 0.0 and PANE.stars_at(PANE.STARS_END + 0.01).alpha == 0.0, "eight yellow stars fly outward from the second frame and are gone by %.2f s" % PANE.STARS_END)
+	check(PANE.puffs_at(0.0).alpha == 0.0 and PANE.puffs_at(PANE.PUFFS_START).alpha > 0.0 and PANE.puffs_at(0.3).grow == 1.0 and PANE.puffs_at(0.3).ring == 0.0 and PANE.puffs_at(0.55).ring > 0.5 and PANE.puffs_at(PANE.PUFFS_END).alpha == 0.0, "smoke builds up, then thins into rings and is gone by %.2f s" % PANE.PUFFS_END)
+	var fl2: Dictionary = PANE.flash_2_at(PANE.FLASH_2_START)
+	var fl2b: Dictionary = PANE.flash_2_at(PANE.FLASH_2_PEAK)
+	check(fl2.alpha == 1.0 and fl2b.w > fl2.w and fl2b.h > fl2.h and PANE.flash_2_at(PANE.FLASH_2_END - 0.01).alpha < 0.2 and PANE.flash_2_at(PANE.FLASH_2_END + 0.01).alpha == 0.0 and PANE.flash_2_at(0.1).alpha == 0.0, "a second white square grows at the middle at %.2f s and fades by %.2f s" % [PANE.FLASH_2_START, PANE.FLASH_2_END])
+	var fl3: Dictionary = PANE.flash_3_at(PANE.FLASH_3_START)
+	check(fl3.alpha == 1.0 and PANE.flash_3_at(PANE.FLASH_3_PEAK).w > fl3.w and PANE.flash_3_at(PANE.FLASH_3_END + 0.01).alpha == 0.0 and PANE.flash_3_at(0.5).alpha == 0.0, "a third flashes over the plate at %.2f s" % PANE.FLASH_3_START)
+	check(PANE.glow_at(PANE.GLOW_START) > 0.3 and PANE.glow_at(PANE.KO_SECONDS) == 0.0 and PANE.glow_at(0.5) == 0.0, "a pale rim round the plate fades as the card comes to rest")
+	var ordered: bool = PANE.SQUARE_2 < PANE.PUFFS_START and PANE.PUFFS_START < PANE.FLASH_2_START and PANE.FLASH_2_START < PANE.FLASH_2_PEAK and PANE.FLASH_2_PEAK < PANE.FLASH_2_END \
+		and PANE.PUFFS_END < PANE.FLASH_3_START and PANE.FLASH_3_START < PANE.FLASH_3_PEAK and PANE.FLASH_3_PEAK < PANE.FLASH_3_END and PANE.FLASH_3_END <= PANE.GLOW_START + 0.001 and PANE.GLOW_START < PANE.KO_SECONDS
+	check(ordered, "the pieces run in the reference's order: square, card, smoke, second flash, third flash, rim")
+	# the card's own geometry, in design units
+	var inside := true
+	for r in [PANE.FIELD_RECT, PANE.PLATE_RECT, PANE.BLOCK_EDGE_RECT, PANE.BLOCK_RECT]:
+		if not PANE.RING_RECT.encloses(r):
+			inside = false
+	check(inside and PANE.FIELD_RECT.encloses(PANE.PLATE_RECT) and PANE.PLATE_RECT.encloses(PANE.BLOCK_EDGE_RECT) and PANE.BLOCK_EDGE_RECT.encloses(PANE.BLOCK_RECT), "the card is nested: ring, field, plate, the teal block's edge, the block")
+	check(PANE.CARD_RING == Color8(3, 102, 193) and PANE.CARD_FIELD == Color8(32, 78, 147) and PANE.CARD_PLATE == Color8(22, 137, 211) and PANE.BLOCK_TEAL == Color8(0, 120, 152), "the reference's blues and teal")
 	var pane = PANE.new(5, null)
 	pane.refresh(contestant(true))
 	check(not pane.ko and not pane.marked and not pane.is_animating() and pane.ko_age > 1.0e8, "an opponent that is in has no card")
@@ -539,7 +630,7 @@ func test_ko_card() -> void:
 	pane.refresh(contestant(false, 31))
 	check(near(pane.ko_age, 0.4), "refreshing every frame does not restart it")
 	pane.advance(5.0)
-	check(pane.ko_age == PANE.KO_SECONDS and not pane.is_animating() and pane.marked, "it settles after %.1f s and stays the card" % PANE.KO_SECONDS)
+	check(pane.ko_age == PANE.KO_SECONDS and not pane.is_animating() and pane.marked, "it settles after %.2f s and stays the card" % PANE.KO_SECONDS)
 	pane.position = Vector2(10, 20)
 	pane.size = Vector2(32.75, 41.5)
 	pane.refresh(contestant(false, 31))
@@ -549,9 +640,23 @@ func test_ko_card() -> void:
 	var late = PANE.new(6, null)
 	late.refresh(contestant(false, 20))
 	check(late.marked and late.ko_age == PANE.KO_SECONDS and not late.is_animating(), "a pane that is already out when first seen is a settled card, not an animation")
+	# the results: an opponent who is out in the session whose (lagging) picture had not shown it
+	var lag = PANE.new(7, null)
+	lag.refresh(contestant(true))
+	var gone = contestant(false, 12)
+	lag.settle_as_card(gone)
+	check(lag.ko and lag.marked and lag.placement == 12 and lag.ko_age == PANE.KO_SECONDS and not lag.is_animating(), "settle_as_card puts the finished card on a pane whose picture is still alive: no animation, its placement, at rest")
+	var half = PANE.new(8, null)
+	half.refresh(contestant(true))
+	half.refresh(contestant(false, 9))
+	half.advance(0.3)
+	half.settle_as_card(contestant(false, 9))
+	check(half.ko_age == PANE.KO_SECONDS and not half.is_animating(), "...and on a card that is mid-animation it ends the animation")
 	check(not PANE.show_labels, "the contestant number and course text are off by default (the live pane carries no text)")
 	pane.free()
 	late.free()
+	lag.free()
+	half.free()
 
 # ---- the HUD ---------------------------------------------------------------------------------------------------------------------
 

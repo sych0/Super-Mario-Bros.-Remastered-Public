@@ -22,6 +22,7 @@ disagree about *what Battle should do*, nothing changes until Zack approves (eve
   *(Update: the video is public, `https://www.youtube.com/watch?v=AUcFTEfFp58`; for that video alone, frames and short contact
   sheets may be viewed when building the Battle UI, and the video is still never committed or redistributed. This does not
   extend to any ROM or ROM-derived asset. See `tools/reference/README.md`.)*
+  *(Doc 54 measures the video at its source 60 fps and corrects four readings in this document: B35-INCOMING-004 (the lines end on the WATCH OUT! pill, and exist while an opponent aims at the player), B35-INCOMING-006 (the eye counter is not the attackers' count), B35-TARGET-002/003 (the bracket is thick and inside the pane; the send is a constant-speed 15-frame flight) and B35-INCOMING-001 (an icon leaves the bar at its release, no marker).)*
 * The video has two complete matches, both won by the recording player:
   * **Match 1 (M1)**: a time-limited *Special Battle* event (34 players, starts on 1-2). Match start at about t=20 s,
     GO at t≈25 s, won at t≈412 s.

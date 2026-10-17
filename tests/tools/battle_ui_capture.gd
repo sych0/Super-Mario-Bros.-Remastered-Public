@@ -6,9 +6,9 @@ extends SceneTree
 ##     --rendering-method gl_compatibility --resolution 1920x1080 --fixed-fps 60 \
 ##     -s tests/tools/battle_ui_capture.gd -- out=/some/dir [seed=19] [pack=SandboxStandIn] [shots=1,2,3,4,5,6,7,8]
 ##   1 match start: HERE WE GO..., READY, 3, 2, 1, GO! (real time)     2 the whole screen in play
-##   3 the targeting selector: at rest, just changed, settling, Most Coins refused, the reticle punch
-##   4 the incoming bar: queued icons travelling, waiting at the boundary, in the level, WATCH OUT! and the eye counter
-##   5 KO cards: the animation at six moments, then settled; the alive badge          6 the whole screen late in a match
+##   3 the targeting selector: at rest, just changed, settling, Most Coins refused, the reticle after a mode change
+##   4 the incoming bar: icons travelling, waiting at the boundary, leaving; the attacker lines and WATCH OUT!
+##   5 KO cards: the animation at the reference's own moments (doc 54), then settled; the alive badge          6 the whole screen late in a match
 ##   7 the labels debug mode (F3)           8 the window crop: the hidden rows beside the window, with and without the HUD
 ## The session clock is driven by hand (the handler is switched off), so every picture is of a known Battle second;
 ## only presentation animations follow the wall clock.
@@ -190,7 +190,7 @@ func _run() -> void:
 		await grab("03g-attackers-chosen", cross, 6)
 		screen.select_target_mode(mode.RANDOM)
 		await frames(3)
-		await grab("03h-reticle-punch", Rect2(0, 0, 108, 270), 4)
+		await grab("03h-reticle-after-mode", Rect2(0, 0, 108, 270), 4)
 		await frames(40)
 		await grab("03i-reticle-settled", Rect2(0, 0, 108, 270), 4)
 	if wanted.has("4"):
@@ -213,6 +213,17 @@ func _run() -> void:
 		await grab("04e-bar-active", bar, 4)
 		await frames(60)
 		await grab("04f-bar-waiting", bar, 4)
+		# two opponents (one in each panel) aim at the player: their lines grow to the pill's two ends, the pill flashes in
+		var left_aimer := alive_between(1, 17, 7)
+		var right_aimer := alive_between(18, 34, 7)
+		for id in [left_aimer, right_aimer]:
+			if session.contestants[id].target_id == 0:
+				session.attacks.set_target(session, id, 1 if id != 1 else 2)
+			session.attacks.set_target(session, id, 0)
+		for t in [["04g-lines-start", 3], ["04h-lines-half", 6], ["04i-lines-full", 20], ["04j-pill-flash", 45]]:
+			await frames(t[1])
+			await grab(t[0], bar, 4)
+			await grab(t[0] + "-screen")
 	if wanted.has("5"):
 		var victim := alive_between(1, 17, 5)
 		await grab("05a-before-ko", layout.slots[victim - 1].grow(6.0), 8)
@@ -223,7 +234,7 @@ func _run() -> void:
 			await process_frame
 			if pane.marked:
 				break
-		var shots := [0.03, 0.12, 0.28, 0.45, 0.63, 0.8]
+		var shots := [0.0, 0.0167, 0.033, 0.05, 0.1, 0.2, 0.25, 0.3, 0.45, 0.55, 0.77, 0.8, 0.88, 0.95]
 		for i in shots.size():
 			pane.ko_age = shots[i]
 			pane.overlay.queue_redraw()
@@ -254,7 +265,7 @@ func _run() -> void:
 		screen.game_frozen = true # holds the presentation clock; the moments below are stepped by hand
 		var atk = session.report_enemy_defeat(0, load("res://Scripts/Classes/Battle/BattleEnemyType.gd").Kind.GOOMBA)
 		var elapsed := 0.0
-		for step in [["11a-send-0ms", 0.0], ["11b-send-60ms", 0.06], ["11c-send-120ms", 0.06], ["11d-send-190ms", 0.07], ["11e-send-250ms", 0.06]]:
+		for step in [["11a-send-frame00", 0.0], ["11b-send-frame05", 5.0 / 60.0], ["11c-send-frame10", 5.0 / 60.0], ["11d-send-frame14", 4.0 / 60.0], ["11e-send-frame15", 1.0 / 60.0]]:
 			screen.attack_view.update(step[1])
 			elapsed += step[1]
 			screen.refresh()
@@ -264,10 +275,13 @@ func _run() -> void:
 		screen.game_frozen = false
 		await frames(60)
 		fixed_target(0)
-		session.report_enemy_defeat(alive_between(1, 17, 6), load("res://Scripts/Classes/Battle/BattleEnemyType.gd").Kind.KOOPA)
-		await frames(14)
-		await grab("11f-bot-to-player-line")
-		await grab("11f-bot-to-player-line-bar", Rect2(0, 190, 480, 80), 2)
+		var aimer := alive_between(1, 17, 6)
+		if session.contestants[aimer].target_id == 0:
+			session.attacks.set_target(session, aimer, alive_between(1, 17, 8))
+		session.attacks.set_target(session, aimer, 0)
+		await frames(30)
+		await grab("11f-lines-and-pill")
+		await grab("11f-lines-and-pill-bar", Rect2(0, 190, 480, 80), 2)
 	if wanted.has("10"):
 		# the results: the field must look exactly as it did when the round ended (doc 51)
 		await grab("10a-before-death")

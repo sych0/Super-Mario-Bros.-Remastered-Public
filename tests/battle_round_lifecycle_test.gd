@@ -327,6 +327,11 @@ func test_results_field_frozen() -> void:
 		if not over.marked.has(id):
 			kept = false
 	check(kept, "every KO card of the match is still a KO card (%d)" % over.marked.size())
+	var pending_ok := true
+	for i in scr.panes.size():
+		if not s.contestants[i + 1].alive and not scr.panes[i].marked:
+			pending_ok = false
+	check(pending_ok, "an opponent who is out in the session has its settled card at ROUND_OVER even if its lagging picture had not shown the KO yet: no pane is held mid-death (doc 54)")
 	var tick_over: int = s.tick_count
 	var got: bool = await results_up()
 	check(got and s.finished and s.tick_count > tick_over, "the results came up and the rest of the match was played out behind them (tick %d -> %d, %d alive left)" % [tick_over, s.tick_count, s.alive_count])
@@ -383,6 +388,7 @@ func test_win_round() -> void:
 	var over: bool = await wait_until(func(): return state() == ROUND.State.ROUND_OVER, 30)
 	check(over and rnd().end_cause == ROUND.End.WIN, "a win ends the round")
 	check(scr.game_frozen and scr.game_viewport.process_mode == Node.PROCESS_MODE_DISABLED, "the game window holds still after a win")
+	check(scr.panes.all(func(p): return p.marked and not p.is_animating()), "after a win all 34 opponent panes are settled KO cards, as in the reference (t=1070: every other pane is a card before the results flash)")
 	check(not scr.showing_result, "a win holds for a moment before the results")
 	var got: bool = await results_up()
 	check(got and old.get_player().placement == 1 and scr._overlay_label.text.contains("YOU WON") and scr._overlay_label.text.contains("OPPONENTS LEFT: 0"), "the results show the win")

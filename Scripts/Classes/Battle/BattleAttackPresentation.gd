@@ -1,9 +1,9 @@
 class_name BattleAttackPresentation
 extends RefCounted
 ## The visible side of the enemy send / receive loop, as plain data. It READS the authoritative event
-## log (SENT, RECEIVED, INCOMING_ACTIVATED, INCOMING_RESOLVED) and turns it into what the Battle
-## screen draws: the real player's reticle flights (`player_flights`), the thin red lines of attacks
-## on the real player (`flights` with the player as target), and each contestant's count of queued / active
+## log (SENT, RECEIVED, INCOMING_ACTIVATED, INCOMING_RESOLVED, TARGET_CHANGED) and turns it into what the Battle
+## screen draws: the real player's reticle flights (`player_flights`), the thin red lines of the opponents who are aiming at the real
+## player (`lines`, with WATCH OUT! for as long as there is one: doc 54), and each contestant's count of queued / active
 ## incoming enemies (the real player's list is the incoming strip). A bot's send at another bot is
 ## bookkept (records, counts) but never presented (doc 47 B35-ATTACK-002).
 ##
@@ -34,14 +34,14 @@ const RECEIVE_FLASH := 0.45 ## seconds a new arrival keeps the strip lit (from t
 const SPAWN_FLASH := 0.6 ## seconds the strip marks that an attack's enemy just appeared in the level
 const RESOLVE_FADE := 0.5 ## seconds a just-resolved attack's icon lingers in the strip, fading
 const MAX_RESOLVED_KEPT := 6 ## a safety valve for the fading icons (a round never has this many at once)
-const WATCH_OUT_HOLD := 1.0 ## seconds the WATCH OUT! pill stays after a bot's line to the real player has landed (doc 47 B35-INCOMING-005)
+const LINE_SECONDS := BattleSendStyle.SECONDS ## the head of an attacker's line moves from its pane to the pill in 15 frames (measured, doc 54)
 
 ## How an attack on the real player is shown. Derived from the authoritative state (`phase_of`).
 enum Phase {QUEUED, ARRIVING, IN_LEVEL, RESOLVED}
 
 var session: BattleSession = null ## read only
 var clock := 0.0 ## presentation seconds
-var flights: Array[BattleAttackFlight] = [] ## lines in the air or still marking their target, oldest first
+var flights: Array[BattleAttackFlight] = [] ## the real player's sends in the air, oldest first
 var records := {} ## seq -> record
 var trace_hash := 0 ## rolling hash of every event consumed, in order (replay checks)
 var trace_count := 0 ## how many attack events were consumed
@@ -59,7 +59,8 @@ var _last_activated := -1.0e9
 var _last_activated_seq := -1
 var _resolved_recent: Array[Dictionary] = [] ## the real player's attacks that just ended, for the strip's fade
 var _animate_until := 0.0 ## presentation clock until which something timed (a flash, a fade) is still running
-var _alert_until := -1.0e9 ## presentation clock until which WATCH OUT! shows: a bot's send at the real player, in the air or just landed
+var _lines := {} ## bot id -> presentation clock at which its line to the real player started (it aims at the real player, and was seen to start)
+var _pill_since := -1.0 ## presentation clock at which the first of the current lines started: when WATCH OUT! appeared (-1: no line, no pill)
 var _targets := PackedInt32Array() ## every contestant's current target as presented: the session's initial targets, moved by TARGET_CHANGED
 
 ## A presentation of `session`'s attacks. Attacks that already happened (a presentation created
@@ -97,6 +98,8 @@ func clear_flights() -> void:
 	flights.clear()
 	_flight_by_seq.clear()
 	_resolved_recent.clear()
+	_lines.clear()
+	_pill_since = -1.0
 
 # ---- reading the log --------------------------------------------------------------------------------
 
@@ -117,7 +120,7 @@ func _consume(silent: bool) -> void:
 			BattleSession.EventType.INCOMING_SPAWNED:
 				_on_spawned(int(e.a))
 			BattleSession.EventType.TARGET_CHANGED:
-				_targets[int(e.id)] = int(e.a) # not a trace event: targets are shown, not replayed as lines
+				_on_target_changed(int(e.id), int(e.a), silent) # not a trace event: targets are shown, not replayed
 
 func _note(type: int, seq: int, sender: int, target: int, kind: int, cause := 0) -> void:
 	trace_count += 1
@@ -129,18 +132,19 @@ func _on_sent(seq: int, sender: int, target: int, kind: int, tick: int, silent: 
 	records[seq] = {"seq": seq, "sender": sender, "target": target, "kind": kind, "state": BattleAttack.State.QUEUED,
 		"sent_tick": tick, "activated_tick": -1, "resolved_tick": -1, "cause": BattleAttack.Resolution.NONE,
 		"sent_at": clock, "received_at": -1.0, "activated_at": -1.0, "resolved_at": -1.0, "spawned_at": -1.0,
-		"landed_at": clock if silent else clock + BattleAttackFlight.duration_for(sender)}
+		"landed_at": clock} # an icon enters the incoming bar at the moment of the send
 	_queued[target] += 1
 	_open[target].append(seq)
 	_note(BattleSession.EventType.SENT, seq, sender, target, kind)
 	if silent:
 		return
 	if target == BattleSession.PLAYER_ID:
-		_animate_for(BattleAttackFlight.DURATION + RECEIVE_FLASH) # the line, then the strip's "new" outline
-		if sender != BattleSession.PLAYER_ID:
-			_alert_until = maxf(_alert_until, clock + BattleAttackFlight.DURATION + WATCH_OUT_HOLD)
-	if sender != BattleSession.PLAYER_ID and target != BattleSession.PLAYER_ID:
-		return # a bot's send at another bot is not drawn (B35-ATTACK-002): no flight, no mark
+		_animate_for(RECEIVE_FLASH) # the strip's "new" outline
+	if sender != BattleSession.PLAYER_ID:
+		return # only the real player's send is a flight; a bot's is never drawn as one (its line is the aim, not the send)
+	for old in flights:
+		if old.sender == BattleSession.PLAYER_ID and old.strength(clock) > 0.0:
+			old.cancel(clock) # a newer send takes over: the bracket in the air is simply gone, as in the reference
 	var flight := BattleAttackFlight.new()
 	flight.seq = seq
 	flight.sender = sender
@@ -148,12 +152,28 @@ func _on_sent(seq: int, sender: int, target: int, kind: int, tick: int, silent: 
 	flight.kind = kind
 	flight.born = clock
 	flight.duration = BattleAttackFlight.duration_for(sender)
-	flight.linger = 0.0 if sender == BattleSession.PLAYER_ID else BattleAttackFlight.LINGER
 	flights.append(flight)
 	_flight_by_seq[seq] = flight
-	if flights.size() > MAX_FLIGHTS: # never in a real match; the oldest line goes first
+	if flights.size() > MAX_FLIGHTS: # never in a real match; the oldest one goes first
 		var dropped: BattleAttackFlight = flights.pop_front()
 		_flight_by_seq.erase(dropped.seq)
+
+## A contestant's target changed. A bot that now aims at the real player gets a line (and WATCH OUT! if it is the first); a bot that stops
+## aiming at them (a re-target, a KO: the session logs TARGET_CHANGED to -1 for a KO) loses it that frame. Nothing is drawn for what
+## happened before this presentation existed (`silent`), and the initial targets never start a line.
+func _on_target_changed(id: int, new_target: int, silent: bool) -> void:
+	_targets[id] = new_target
+	if silent or id == BattleSession.PLAYER_ID:
+		return
+	if new_target == BattleSession.PLAYER_ID:
+		if not _lines.has(id):
+			if _lines.is_empty():
+				_pill_since = clock
+			_lines[id] = clock
+	elif _lines.has(id):
+		_lines.erase(id)
+		if _lines.is_empty():
+			_pill_since = -1.0
 
 func _on_received(seq: int) -> void:
 	var r: Dictionary = records.get(seq, {})
@@ -232,8 +252,9 @@ func counts(id: int) -> Vector2i:
 	return Vector2i(_queued[id], _active[id])
 
 ## The real player's sends that are still in the air, oldest first, as copies: {seq, target (the authoritative recipient, fixed when
-## the send was logged: a later mode change never moves it), progress (0 at the window, 1 on the pane, eased), cut (its recipient was
-## eliminated in flight: it fades instead of landing)}. The reticle is exactly these in the air, then the target's own bracket.
+## the send was logged: a later mode change never moves it), progress (0 at the window, 1 on the pane, linear in time), cut (its
+## recipient was eliminated in flight: it fades instead of landing), fade}. A send that a newer one took over is not among them. The
+## reticle is exactly these in the air, then the target's own bracket.
 func player_flights() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	for f in flights:
@@ -277,10 +298,27 @@ func player_incoming() -> Array[Dictionary]:
 			"waited": clock - r.activated_at if r.activated_at >= 0.0 else -1.0})
 	return out
 
-## Whether WATCH OUT! shows: a bot has sent an enemy at the real player and its line is in the air or landed within the
-## last WATCH_OUT_HOLD seconds. Strongly inferred from the reference (doc 47 Q8); the pill is a view of this and nothing else.
+## The thin red lines of the opponents who are aiming at the real player, oldest first, as copies: {sender (a bot's id), progress
+## (0..1: how far its head has moved from the bot's pane towards the pill; it takes LINE_SECONDS and is then complete), age (seconds
+## since it started)}. A line exists from the moment the session logs the bot's target as the real player until it logs anything
+## else (a re-target, a KO). Measured on the reference at 60 fps (doc 54): a line ends the frame its sender is knocked out.
+func lines() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for id in _lines:
+		var age: float = clock - float(_lines[id])
+		out.append({"sender": id, "progress": clampf(age / LINE_SECONDS, 0.0, 1.0), "age": maxf(age, 0.0)})
+	out.sort_custom(func(a, b): return float(a.age) > float(b.age))
+	return out
+
+## Whether WATCH OUT! shows: exactly while at least one line does (doc 47 Q8 guessed this; doc 54 measured it: the pill's sessions are
+## the unions of the lines'). The pill is a view of this and nothing else.
 func watch_out() -> bool:
-	return clock < _alert_until
+	return not _lines.is_empty()
+
+## Seconds since WATCH OUT! appeared (the first of the current lines started); -1 while it is not showing. The pill flashes white on
+## its first frame and every 59 frames after.
+func watch_out_age() -> float:
+	return clock - _pill_since if _pill_since >= 0.0 else -1.0
 
 ## (queued, arriving, in level) among the real player's unresolved attacks: `counts(PLAYER_ID).y` split in two.
 func player_phase_counts() -> Vector3i:

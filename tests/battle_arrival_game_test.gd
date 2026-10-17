@@ -330,7 +330,7 @@ func test_strip_phases_follow_real_attacks() -> void:
 	check(a.spawned_tick >= 0 and b.spawned_tick >= 0 and c.spawned_tick >= 0, "all three attacks got their enemy")
 	check(mismatches == 0, "the strip's phase counts equalled the session's at every frame (%d frames, %d mismatches)" % [checked, mismatches])
 	check(order_breaks == 0, "in the strip, in-level icons always come before arriving ones, and those before queued ones")
-	check(transit_seen, "(the strip showed the attacks in transit while their lines were in the air)")
+	check(not transit_seen, "(no icon was ever 'in transit': it enters the bar at the send, doc 54)")
 	var p = PRES.Phase
 	for sq in [a.seq, b.seq, c.seq]:
 		var h: Array = seen[sq]
@@ -340,16 +340,16 @@ func test_strip_phases_follow_real_attacks() -> void:
 		check(monotone, "attack %d went QUEUED -> ... -> IN_LEVEL, never backwards (%s)" % [sq, h.map(func(x): return PRES.phase_name(x))])
 	check(seen[b.seq].has(p.ARRIVING) and seen[c.seq].has(p.ARRIVING), "the second and third were seen ARRIVING while they waited their gap")
 	check(strip().phases == Vector3i(0, 0, 3) and strip().counts == Vector2i(0, 3), "at the end: 3 in level, 0 arriving, 0 queued (the session's `counts`: 3 ACTIVE)")
-	# the player defeats the first: its icon fades green where it was; the others stay in the level
+	# the player defeats the first: nothing is drawn for it; the others stay in the level
 	var first = node_for(a.seq)
 	first.stomped_on(player())
 	await physics_frames(2)
 	await frames(3)
 	check(a.resolution == RES.DEFEATED_BY_PLAYER and strip().rows.size() == 2 and strip().phases == Vector3i(0, 0, 2), "defeated: two left in the level")
-	check(strip().ghosts.size() == 1 and strip().ghosts[0].seq == a.seq and strip().ghosts[0].cause == RES.DEFEATED_BY_PLAYER and strip().ghosts[0].spawned, "its icon is fading in the strip, marked as defeated and as having been in the level")
-	check(strip().items.size() == 3 and strip().items[0].get("ghost", false) and strip().items[0].seq == a.seq, "...in the slot it had (first)")
+	check(strip().ghosts.size() == 1 and strip().ghosts[0].seq == a.seq and strip().ghosts[0].cause == RES.DEFEATED_BY_PLAYER and strip().ghosts[0].spawned, "its end is remembered for the readers, marked as defeated and as having been in the level")
+	check(strip().items.size() == 2 and not strip().items.any(func(i): return i.get("ghost", false) or i.seq == a.seq), "...but the bar draws nothing for it: the reference's icon left the bar when its enemy appeared")
 	await frames(40)
-	check(strip().ghosts.is_empty() and strip().items.size() == 2, "...and it is gone half a second later")
+	check(strip().ghosts.is_empty() and strip().items.size() == 2, "...and the record is gone half a second later")
 	await drain()
 
 # ---- one effect per spawn ----------------------------------------------------------------------------------------

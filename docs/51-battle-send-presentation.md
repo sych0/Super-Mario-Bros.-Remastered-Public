@@ -2,6 +2,8 @@
 
 Status: implemented on top of `fd25a92` (doc 50). It is a lifecycle + presentation milestone: no targeting, recipient, RNG, send count, queue, spawn, bot, timer, coin, round-outcome or progression rule was touched (section 9).
 
+> **Superseded in part by [doc 54](54-battle-presentation-measured-from-video.md)**: the send is a constant-speed 15-frame flight from (240, 120) (not a 0.25 s ease), a newer send **cancels** the older one in the air (rapid sends do not all land), the attacker lines belong to the opponents that **aim** at the player and end on the WATCH OUT! pill (not on the bar), and there is no landing punch. Section 0's "unmeasured" values were measured in docs 52 and 54.
+
 ## 0. Read this first: what the reference video could and could not give
 
 The brief asks for frame-level measurement of `reference.mp4`. **That file was not reachable from the session that wrote this.** This milestone ran in a cloud container; the path in the brief (`/Volumes/18tb/…`) is on Zack's Mac, and the video is (rightly) not in the repository. Nothing here was measured from the video, and nothing of it was seen, uploaded or guessed at. What was done instead:

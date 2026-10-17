@@ -17,8 +17,8 @@ extends Control
 ##
 ## The enemy send / receive loop is made visible here and only here (doc 44, as the reference showed it, doc 51):
 ## `attack_view` reads the session's attack events into the reticle's flights (`target_reticle`: the real player's own sends fly
-## from the game window to the recipient's pane), the thin red lines of attacks on the player (`attack_layer`), the real
-## player's incoming bar (`incoming_strip`, strip A) and WATCH OUT!, and, through the preview driver's tracks, incoming enemies
+## from the game window to the recipient's pane), the thin red lines of the opponents that aim at the player (`attack_layer`), the real
+## player's incoming bar (`incoming_strip`, strip A) and WATCH OUT! (`status_strip`), and, through the preview driver's tracks, incoming enemies
 ## in the opponents' pictures. Bot-to-bot sends are not drawn. It never writes to the session; nothing of it reaches the game
 ## window. Once the round is over the whole field is held as it was (`field_frozen`).
 
@@ -69,7 +69,7 @@ var driver: BattlePreviewDriver = null ## drives the live previews (all 34 on Wo
 var attack_view: BattleAttackPresentation = null ## the visible side of this session's attack loop (a reader of its events; null when attacks are off)
 var attack_layer: BattleAttackLayer = null ## the thin red lines of attacks on the real player, over the canvas
 var incoming_strip: BattleIncomingStrip = null ## the real player's incoming enemies, in strip A
-var status_strip: BattleStatusStrip = null ## the eye counter and WATCH OUT!, in strip B
+var status_strip: BattleStatusStrip = null ## the WATCH OUT! pill, in strip B
 var hud: BattleHud = null ## coins, item box, timer and selector, inside the window
 var selector: BattleTargetSelector = null ## the four-way targeting selector (hud's child)
 var badge_course: BattleBadge = null
@@ -568,17 +568,16 @@ func _refresh_hud() -> void:
 	badge_course.set_value("%d-%d" % [session.world, session.level])
 	incoming_strip.set_power(clampi(int(Global.player_power_states[0]), 0, 2))
 	incoming_strip.show_legend = BattleOpponentPane.show_labels
-	status_strip.set_eye(session.attackers_of(BattleSession.PLAYER_ID).size() if with_attacks else -1)
-	status_strip.set_watch_out(with_attacks and attack_view.watch_out())
+	status_strip.set_pill(attack_view.watch_out_age() if with_attacks else -1.0)
 
 ## Advances the animations that belong to the screen's own clock (not the Battle clock): the selector's fade, the
-## reticle's punch, the KO cards, WATCH OUT!'s pop and the banner's. Zero while the game is paused, so a pause holds them.
+## reticle's idle pulse, the KO cards and the banner's. Zero while the game is paused, so a pause holds them. (WATCH OUT!'s flash
+## follows the attack presentation's clock, which holds with the pause too.)
 func _advance_ui(delta: float) -> void:
 	if delta <= 0.0:
 		return
 	selector.advance(delta)
 	target_reticle.advance(delta)
-	status_strip.advance(delta)
 	_banner.advance(delta)
 	for pane in panes:
 		pane.advance(delta)
@@ -605,7 +604,7 @@ func _reticle_target() -> int:
 
 ## Selects the real player's targeting mode (BattleTargeting.Mode). Only while the round is set up or being
 ## played and the game is not paused. Returns whether the session accepted it. The selector answers at once: a
-## chosen mode swells and lights the cross (and the reticle punches on its pane); a mode that is not available (Most
+## chosen mode swells and lights the cross (the reticle just moves to its new pane); a mode that is not available (Most
 ## Coins, until coin data exists) leaves the mode alone, and its pill shakes and flashes red instead.
 func select_target_mode(mode: int) -> bool:
 	var session_now := BattleSession.current
@@ -616,7 +615,6 @@ func select_target_mode(mode: int) -> bool:
 		return false
 	if session_now.set_player_target_mode(mode):
 		selector.set_mode(mode, true)
-		target_reticle.pulse()
 		return true
 	if not session_now.target_mode_available(mode):
 		selector.refuse(mode)
@@ -679,8 +677,9 @@ func _begin_round_over() -> void:
 
 ## Holds the match field as it is: one last read of the session (the player's own KO, the last KO cards), then the
 ## panes, their previews, the badges, the HUD and the attack lines stop following it. The pictures are what the
-## previews drew last (never a placeholder fallback), a KO card that has settled stays, and an animation that is
-## playing (a KO card popping in) finishes on the screen's own clock.
+## previews drew last (never a placeholder fallback), a KO card that has settled stays, an animation that is
+## playing (a KO card popping in) is at rest, and a contestant who is out in the session but whose picture had not shown it yet
+## (the previews run behind the session) gets its settled card: no pane is held mid-death (doc 54).
 func _freeze_field() -> void:
 	if field_frozen:
 		return
@@ -688,10 +687,14 @@ func _freeze_field() -> void:
 	field_frozen = true
 	for cell in cells:
 		cell.freeze()
-	for pane in panes:
-		pane.settle() # a KO card that was popping in is at rest (the screen's clock may be paused with the death)
+	for i in panes.size():
+		var c := session.contestants[i + 1]
+		if not c.alive and not panes[i].marked:
+			panes[i].settle_as_card(c) # out in the session, still alive in its (lagging) picture: it is a card now, as the reference's panes are at a win
+		else:
+			panes[i].settle() # a KO card that was popping in is at rest (the screen's clock may be paused with the death)
 	target_reticle.clear() # a send in the air is not left hanging over the results
-	status_strip.set_watch_out(false)
+	status_strip.set_pill(-1.0)
 	if attack_view != null:
 		attack_view.clear_flights() # (the player's sends and the red lines in the air)
 	attack_layer.sync()

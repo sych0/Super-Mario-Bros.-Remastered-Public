@@ -70,6 +70,7 @@ func _run() -> void:
 	test_pause_holds_every_fade()
 	test_round_cleanup()
 	test_strip_model()
+	test_strip_redraws_while_icons_travel()
 	test_late_creation_is_silent()
 	test_animating_flag()
 	test_presentation_is_read_only()
@@ -165,31 +166,24 @@ func test_phase_lifecycle() -> void:
 	check(g.size() == 1 and g[0].seq == a.seq and g[0].cause == R.DEFEATED_BY_PLAYER and g[0].spawned and close(g[0].fade, 1.0), "...but its icon is remembered, to fade")
 
 func test_in_transit_and_fresh_follow_the_line() -> void:
-	print("-- in transit until the line lands; the 'new' mark starts at the landing")
+	print("-- an icon enters the bar at the send; the 'new' mark starts there (doc 54: no line to wait for)")
 	var s = make_session()
 	var v = P.new(s)
 	var a = s.report_enemy_defeat(5, GOOMBA)
 	v.update(0.0)
 	var r = v.player_incoming()[0]
-	check(r.in_transit and r.fresh == 0.0 and r.phase == PH.QUEUED, "at the send: in transit, no 'new' mark yet, QUEUED")
-	v.update(F.DURATION * 0.9)
-	r = v.player_incoming()[0]
-	check(r.in_transit and r.fresh == 0.0, "just before it lands: still in transit, still no mark")
-	v.update(F.DURATION * 0.1 + 0.001)
-	r = v.player_incoming()[0]
-	check(not r.in_transit and r.fresh > 0.95, "when the line lands: not in transit, the mark is full (%.2f)" % r.fresh)
+	check(not r.in_transit and r.fresh > 0.95 and r.phase == PH.QUEUED and r.age == 0.0, "at the send: the icon is in the bar (never in transit), the 'new' mark is full, QUEUED")
 	v.update(P.RECEIVE_FLASH * 0.5)
-	check(v.player_incoming()[0].fresh > 0.4 and v.player_incoming()[0].fresh < 0.6, "...and fades from there")
+	check(v.player_incoming()[0].fresh > 0.4 and v.player_incoming()[0].fresh < 0.6, "the mark fades from there")
 	v.update(P.RECEIVE_FLASH)
 	check(v.player_incoming()[0].fresh == 0.0, "...and is gone after RECEIVE_FLASH")
-	# the line outlives its own flash: the strip's mark must not be cut when the line is pruned
+	check(v.flights.is_empty() and v.flight_of(a.seq) == null, "no flight exists for a bot's send: nothing outlives the icon's own flash")
 	var s2 = make_session()
 	var v2 = P.new(s2)
 	s2.report_enemy_defeat(5, GOOMBA)
 	v2.update(0.0)
-	v2.update(F.DURATION + F.LINGER + 0.05) # the flight is over and pruned
-	check(v2.flights.is_empty() and v2.player_incoming()[0].fresh > 0.0 and v2.player_incoming()[0].fresh < 1.0, "the 'new' mark survives the line being pruned (%.2f)" % v2.player_incoming()[0].fresh)
-	check(v2.is_animating(), "...and the strip keeps redrawing for it")
+	v2.update(0.1)
+	check(v2.is_animating() and v2.player_incoming()[0].fresh > 0.0 and v2.player_incoming()[0].fresh < 1.0, "the strip keeps redrawing while the mark fades (%.2f)" % v2.player_incoming()[0].fresh)
 	# a send that is not for the player has no strip row at all
 	var s3 = S.new(3)
 	s3.attacks.bots_send = false
@@ -382,7 +376,7 @@ func test_pause_holds_every_fade() -> void:
 	var a = s.report_enemy_defeat(5, GOOMBA)
 	var b = s.report_enemy_defeat(6, KOOPA)
 	steps(s, 3)
-	v.update(F.DURATION + 0.1)
+	v.update(0.35)
 	s.report_player_incoming_spawned(a.seq)
 	s.resolve_player_incoming(a.seq, R.DEFEATED_BY_PLAYER)
 	s.report_player_incoming_spawned(b.seq)
@@ -433,7 +427,7 @@ func test_strip_model() -> void:
 	steps(s, 3)
 	s.report_player_incoming_spawned(next_to_spawn(s).seq)
 	s.report_player_incoming_spawned(next_to_spawn(s).seq)
-	v.update(F.DURATION + 0.1)
+	v.update(0.35)
 	s.resolve_player_incoming(0, R.DEFEATED_BY_PLAYER)
 	v.update(0.05)
 	var strip = STRIP.new(null)
@@ -441,17 +435,17 @@ func test_strip_model() -> void:
 	strip.sync()
 	check(strip.rows.map(func(r): return r.seq) == s.get_incoming(0).map(func(r): return r.seq) and strip.counts == v.counts(0), "`rows` and `counts` are exactly the session's unresolved attacks")
 	check(not strip.rows.any(func(r): return r.seq == 0) and strip.ghosts.size() == 1 and strip.ghosts[0].seq == 0, "...a fading icon is never among them")
-	check(strip.items.size() == strip.rows.size() + 1 and strip.items[0].get("ghost", false) and strip.items[0].seq == 0, "`items` (what is drawn) has the fading icon in the slot its attack had: first")
-	check(strip.items.map(func(i): return i.seq) == [0, 1, 2, 3, 4], "...and everything in send order")
+	check(strip.items.size() == strip.rows.size() and not strip.items.any(func(i): return i.get("ghost", false)), "`items` (what is drawn) is the rows: an ended attack's icon is not drawn fading (the reference removes it)")
+	check(strip.items.map(func(i): return i.seq) == [1, 2, 3, 4], "...in send order")
 	check(strip.phases == Vector3i(2, 1, 1), "the phases are (queued, arriving, in level) = %s" % [strip.phases])
-	# merged(): a ghost between two live rows keeps its place
+	# merged(): the rows alone (ghosts are not drawn any more)
 	var rows: Array[Dictionary] = [{"seq": 1, "phase": PH.IN_LEVEL}, {"seq": 5, "phase": PH.QUEUED}]
 	var ghosts: Array[Dictionary] = [{"seq": 3, "cause": R.OTHER, "fade": 0.5}]
 	var m = STRIP.merged(rows, ghosts)
-	check(m.map(func(i): return i.seq) == [1, 3, 5] and m[1].ghost == true and m[1].phase == PH.RESOLVED and not m[0].has("ghost"), "merged(): by send order, the fading icon marked and in the RESOLVED phase")
+	check(m.map(func(i): return i.seq) == [1, 5] and not m[0].has("ghost"), "merged(): the live rows in send order; a fading icon is not among them")
 	check(rows[0].keys() == ["seq", "phase"] and ghosts[0].keys() == ["seq", "cause", "fade"], "(merged() copies: neither input is changed)")
 	var none: Array[Dictionary] = []
-	check(STRIP.merged(none, none).is_empty() and STRIP.merged(rows, none).size() == 2 and STRIP.merged(none, ghosts).size() == 1, "(empty inputs)")
+	check(STRIP.merged(none, none).is_empty() and STRIP.merged(rows, none).size() == 2 and STRIP.merged(none, ghosts).is_empty(), "(empty inputs)")
 	# the count text
 	check(STRIP.legend(Vector3i.ZERO).is_empty(), "no attacks: no count text")
 	var lg = STRIP.legend(Vector3i(3, 1, 2))
@@ -460,6 +454,33 @@ func test_strip_model() -> void:
 	check(STRIP.legend(Vector3i(0, 2, 0)).map(func(t): return t.text) == ["ARRIVING 2"], "only phases that have any are listed")
 	check(STRIP.legend(Vector3i(3, 1, 2), true).map(func(t): return t.text) == ["LVL 2", "ARR 1", "Q 3"], "a crowded strip uses the short forms")
 	check(STRIP.legend(Vector3i(0, 0, 4)).map(func(t): return t.text) == ["IN LEVEL 4"], "(a count is the number of attacks, not of icons)")
+
+func test_strip_redraws_while_icons_travel() -> void:
+	print("-- the strip redraws every frame while an icon travels, and rests once all have arrived")
+	var s = make_session()
+	var v = P.new(s)
+	s.report_enemy_defeat(3, GOOMBA)
+	s.report_enemy_defeat(4, KOOPA)
+	v.update(0.0)
+	var strip = STRIP.new(null)
+	strip.size = Vector2(257.0, 12.0)
+	strip.bind(v, null)
+	var sigs := []
+	for i in 40:
+		v.update(1.0 / 60.0)
+		strip.sync()
+		sigs.append(strip._signature)
+	# (a negative signature is "something moves": it is built from the engine's frame count, so it differs on every real frame)
+	check(sigs.all(func(g): return g < 0), "40 frames of travel: every sync reports motion, so the strip is redrawn on every frame (%d of %d)" % [sigs.filter(func(g): return g < 0).size(), sigs.size()])
+	var xs: PackedFloat32Array = STRIP.place_all(strip.items, strip.size.x)
+	check(xs[0] < STRIP.entry_x(strip.size.x) - 5.0 and absf(strip._shown[int(strip.items[0].seq)] - xs[0]) < 0.01, "...and the drawn icon is on its way, where place_all puts it (%.1f from %.1f)" % [xs[0], STRIP.entry_x(strip.size.x)])
+	for i in 60 * 5:
+		v.update(1.0 / 60.0)
+		strip.sync()
+	var a: int = strip._signature
+	v.update(1.0 / 60.0)
+	strip.sync()
+	check(strip._signature == a and a >= 0, "once every icon is in its place and still, the strip stops redrawing (signature %d, steady)" % a)
 
 func test_late_creation_is_silent() -> void:
 	print("-- a presentation made mid-round shows no lines and no fading icons")
