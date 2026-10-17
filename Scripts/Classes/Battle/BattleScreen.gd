@@ -19,8 +19,9 @@ extends Control
 ## `attack_view` reads the session's attack events into the reticle's flights (`target_reticle`: the real player's own sends fly
 ## from the game window to the recipient's pane), the thin red lines of the opponents that aim at the player (`attack_layer`), the real
 ## player's incoming bar (`incoming_strip`, strip A) and WATCH OUT! (`status_strip`), and, through the preview driver's tracks, incoming enemies
-## in the opponents' pictures. Bot-to-bot sends are not drawn. It never writes to the session; nothing of it reaches the game
-## window. Once the round is over the whole field is held as it was (`field_frozen`).
+## in the opponents' pictures. Every send at an opponent is also a ghost of the sent enemy flying from the sender's pane (or the window) to the
+## recipient's pane and bursting there (`ghost_layer`, doc 55); a bot's send at another bot is drawn that way too. It never writes to the
+## session; nothing of it reaches the game window. Once the round is over the whole field is held as it was (`field_frozen`).
 
 const TITLE_SCENE := "res://Scenes/Levels/TitleScreen.tscn"
 const FONT_PATH := "res://Resources/ThemedResources/FontMain.tres"
@@ -74,6 +75,7 @@ var hud: BattleHud = null ## coins, item box, timer and selector, inside the win
 var selector: BattleTargetSelector = null ## the four-way targeting selector (hud's child)
 var badge_course: BattleBadge = null
 var badge_alive: BattleBadge = null
+var ghost_layer: BattleSendGhostLayer = null ## the ghosts of enemy sends flying between the panes (doc 55), over the panes and under the reticle
 var target_reticle: BattleTargetReticle = null ## the red bracket on the real player's current target pane, and the player's sends in flight
 var debug_view: TextureRect = null ## dev only: opponent #1's atlas cell at native size over the window
 var audio_listener: AudioListener2D = null
@@ -175,6 +177,7 @@ func _exit_tree() -> void:
 	_window_owned = false
 	# Level-sized preview art is only needed while Battle is up.
 	BattlePreviewAssets.clear_cache()
+	BattleSendGhost.clear_cache() # (the ghosts are made from that art)
 	BattleLevelSketch.clear_cache()
 	BattleEnemyFactory.clear_cache()
 
@@ -339,6 +342,10 @@ func _build(l: Dictionary) -> void:
 		badge.position = r.position
 		badge.size = r.size
 		add_child(badge)
+	# The ghosts of enemy sends fly over the panes, under the reticle and the lines.
+	ghost_layer = BattleSendGhostLayer.new(l)
+	ghost_layer.panes = panes
+	add_child(ghost_layer)
 	# The target reticle sits over the panes and under the attack lines.
 	target_reticle = BattleTargetReticle.new(l)
 	add_child(target_reticle)
@@ -519,6 +526,7 @@ func _ensure_attack_view() -> void:
 func _bind_attack_view() -> void:
 	var art: BattlePreviewAssets = driver.assets if driver != null else null
 	attack_layer.bind(attack_view, art)
+	ghost_layer.bind(attack_view, art)
 	incoming_strip.bind(attack_view, art)
 
 ## Everything the attack presentation put on screen goes: lines, reticle flights, pane markers, strip icons.
@@ -526,6 +534,7 @@ func _clear_attack_view() -> void:
 	attack_view = null
 	target_reticle.clear()
 	attack_layer.bind(null, null)
+	ghost_layer.bind(null, null)
 	incoming_strip.bind(null, null)
 	for pane in panes:
 		pane.set_incoming(Vector2i.ZERO)
@@ -545,6 +554,7 @@ func refresh() -> void:
 		var art: BattlePreviewAssets = driver.assets if driver != null else null
 		incoming_strip.assets = art
 	attack_layer.sync()
+	ghost_layer.sync()
 	incoming_strip.sync()
 	if field_frozen:
 		return
@@ -699,8 +709,9 @@ func _freeze_field() -> void:
 	target_reticle.clear() # a send in the air is not left hanging over the results
 	status_strip.set_pill(-1.0)
 	if attack_view != null:
-		attack_view.clear_flights() # (the player's sends and the red lines in the air)
+		attack_view.clear_flights() # (the player's sends, the red lines and the enemies' ghosts in the air)
 	attack_layer.sync()
+	ghost_layer.sync()
 
 ## Finishes the match behind the results: the rest of the placements are decided now (the bots play
 ## it out), so the results show a complete ranking. The player's own placement was fixed at their KO.

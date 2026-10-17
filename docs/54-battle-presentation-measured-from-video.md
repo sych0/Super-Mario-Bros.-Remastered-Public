@@ -100,6 +100,10 @@ on the session's own target when it has landed.
 
 ## 9. Seen in the reference and not built
 
+> **Built by [doc 55](55-battle-opponent-previews-courses-and-send-ghosts.md):** the first two items below are the ghost of every enemy send and its arrival burst (section 4 of doc 55); the
+> pane flashes at t=515.633-515.80 and 518.35-518.48 are bursts, not a separate effect. Doc 55 also replaces the preview's end-of-course placeholder
+> with a cut to the next course.
+
 * **Ghost enemies in opponent panes**: grey translucent enemy sprites materialise at a recipient pane's top and drop in (t=515.667-515.84, 518.30, 521.38 on the sender pane): the bot -> bot send. Doc 51's "bot -> bot sends are not drawn" is not right; our previews already show an incoming enemy, but the grey ghost entry is not reproduced.
 * **Non-KO pane flashes** (white rounded square fading to a pale ring, t=515.633-515.80 on one pane, t=518.35-518.48 on another): trigger unknown.
 * The chest/coin box in strip B (it appears at t=506.0), the coin and ghost icon in the KO card.

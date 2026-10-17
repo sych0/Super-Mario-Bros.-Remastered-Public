@@ -194,6 +194,9 @@ func test_wiring() -> void:
 	check(sc.game_viewport.size == Vector2i(256, 240) and sc.game_container.size == Vector2(256, 240), "the game window is still the contained 256x240 viewport")
 	check(sc.attack_layer.find_children("*", "", true, false).is_empty() and sc.attack_view.flights.is_empty(), "nothing is on screen before the first attack")
 	check(not sc.game_viewport.is_ancestor_of(sc.attack_layer) and not sc.game_viewport.is_ancestor_of(sc.incoming_strip), "no attack visual lives inside the game viewport")
+	check(sc.ghost_layer != null and sc.ghost_layer.view == sc.attack_view and sc.ghost_layer.get_parent() == sc and not sc.game_viewport.is_ancestor_of(sc.ghost_layer), "the ghost layer (doc 55) shows the presentation too, on the Battle canvas and not in the game window")
+	check(sc.ghost_layer.size == Vector2(480, 270) and sc.ghost_layer.mouse_filter == Control.MOUSE_FILTER_IGNORE and sc.ghost_layer.panes.size() == 34 and sc.ghost_layer.drawn().is_empty(), "it covers the canvas, takes no input, knows the 34 panes and starts with nothing to draw")
+	check(sc.ghost_layer.get_index() > sc.panes[33].get_index() and sc.ghost_layer.get_index() < sc.target_reticle.get_index(), "it is drawn over the opponent panes and under the reticle and the lines")
 
 # ---- the target reticle and the PROVISIONAL mode keys (doc 47 M-T1) ------------------------------------------------
 
@@ -328,7 +331,7 @@ func BattleAttackLayerCls():
 # ---- a bot's send ----------------------------------------------------------------------------------------------
 
 func test_bot_send() -> void:
-	print("-- a bot sends to a bot: nothing is drawn")
+	print("-- a bot sends to a bot: a ghost, no reticle and no line")
 	var sc = screen()
 	var s = session()
 	var sender := alive_bot(1)
@@ -336,7 +339,9 @@ func test_bot_send() -> void:
 	fixed_target(target)
 	var a = s.report_enemy_defeat(sender, TYPES.Kind.KOOPA)
 	await process_frame
-	check(a != null and sc.attack_view.flight_of(a.seq) == null and sc.attack_view.flights.is_empty(), "a bot-to-bot send makes no flight")
+	check(a != null and sc.attack_view.flight_of(a.seq) == null and sc.attack_view.flights.is_empty(), "a bot-to-bot send makes no flight (the reticle's alone)")
+	var ghosts: Array = sc.ghost_layer.drawn()
+	check(ghosts.size() == 1 and ghosts[0].seq == a.seq and ghosts[0].sender == sender and ghosts[0].target == target and ghosts[0].kind == TYPES.Kind.KOOPA, "...but a ghost of the Koopa flies from the sender's pane to the recipient's (doc 55)")
 	check(sc.attack_view.records[a.seq].sender == sender and sc.attack_view.records[a.seq].target == target, "(it is recorded: the previews and the counts still follow it)")
 	check(sc.panes[target - 1].incoming == sc.attack_view.counts(target) and auth_counts(target).x >= 1, "...and the target's count is the session's")
 	# three bots send at the same moment to three different bots
@@ -345,7 +350,7 @@ func test_bot_send() -> void:
 		fixed_target(picks[i])
 		s.report_enemy_defeat(alive_bot(20 + i), TYPES.Kind.GOOMBA if i != 1 else TYPES.Kind.KOOPA)
 	await process_frame
-	check(sc.attack_view.flights.is_empty() and sc.target_reticle.flying.is_empty(), "three simultaneous bot sends draw no flight and send no reticle anywhere")
+	check(sc.attack_view.flights.is_empty() and sc.target_reticle.flying.is_empty() and sc.ghost_layer.drawn().size() == 4, "three more simultaneous bot sends draw no flight and send no reticle anywhere; each is a ghost (four in the air)")
 	check(not sc.panes[target - 1].draws_pips() and not sc.panes[picks[0] - 1].draws_pips(), "no pane shows a queued / active marker (SMB35 has none; only the debug labels mode does)")
 	check(not sc.attack_layer.has_method("_draw_target") and not sc.attack_layer.has_method("_draw_flight"), "the layer no longer has the old target tint, the frame flash or the gold line")
 	await frames(30)
@@ -670,11 +675,12 @@ func test_round_restart() -> void:
 	fixed_target(0)
 	s.report_enemy_defeat(alive_bot(), TYPES.Kind.KOOPA)
 	await frames(2)
-	check(not old_view.flights.is_empty() and not sc.incoming_strip.rows.is_empty(), "(there are lines and icons on screen)")
+	check(not old_view.flights.is_empty() and not sc.incoming_strip.rows.is_empty() and not sc.ghost_layer.drawn().is_empty(), "(there are lines, icons and ghosts on screen)")
 	player().die()
 	await wait_until(func(): return rnd().state == ROUND.State.RESULTS, 1500)
 	check(sc.incoming_strip.rows.is_empty() and sc.incoming_strip.counts == Vector2i.ZERO, "when the player is out nothing is left aimed at them: the strip is empty")
 	check(sc.field_frozen and sc.target_reticle.flying.is_empty() and not sc.target_reticle.visible and old_view.flights.is_empty() and BattleAttackLayerCls().drawn_lines(old_view).is_empty(), "no reticle flight, bracket or line is left hanging over the results")
+	check(old_view.send_ghosts().is_empty() and sc.ghost_layer.drawn().is_empty(), "...and no ghost or burst either: the round's end clears every transient send animation")
 	rnd().time_in_state = ROUND.RESULTS_MAX_SECONDS
 	await wait_until(func(): return level_running() and rnd().state == ROUND.State.PLAYING and session() != old_session, 1800)
 	await frames(5)
@@ -683,6 +689,7 @@ func test_round_restart() -> void:
 	check(fresh.flights.is_empty() and fresh.records.is_empty() and fresh.player_flights().is_empty() and fresh.signature() == "0:0", "with no lines, flights, records or history")
 	check(sc.attack_layer.view == fresh and sc.incoming_strip.view == fresh and sc.incoming_strip.rows.is_empty() and sc.incoming_strip.counts == Vector2i.ZERO,
 		"the layer and the strip follow it and show nothing")
+	check(sc.ghost_layer.view == fresh and fresh.send_ghosts().is_empty() and sc.ghost_layer.drawn().is_empty(), "so does the ghost layer")
 	var clean := true
 	for pane in sc.panes:
 		if pane.incoming != Vector2i.ZERO:
@@ -717,7 +724,7 @@ func test_attacks_off() -> void:
 	var sc = screen()
 	check(not session().attacks.enabled and sc.attack_view == null, "with the attack loop off there is no attack presentation")
 	check(not sc.target_reticle.visible and not sc.selector.visible and not session().set_player_target_mode(BattleTargeting_Mode().LOWEST_TIME), "...no reticle, no selector, and no mode to select")
-	check(sc.incoming_strip.rows.is_empty() and sc.attack_layer.view == null, "and the strip and the layer show nothing")
+	check(sc.incoming_strip.rows.is_empty() and sc.attack_layer.view == null and sc.ghost_layer.view == null and sc.ghost_layer.drawn().is_empty(), "and the strip and the layers show nothing")
 	await frames(60 * 5)
 	check(session().events.filter(func(e): return e.type >= SESSION.EventType.SENT).is_empty() and sc.attack_view == null, "five seconds of play produce no attack events and no visuals")
 	SESSION.default_attacks_enabled = true

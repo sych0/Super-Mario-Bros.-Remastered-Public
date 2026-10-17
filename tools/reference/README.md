@@ -26,6 +26,8 @@ python3 tools/reference/measure_reference.py reference.mp4 --start 515 --end 530
 | `bar` | the incoming bar's icons tracked as blobs against the bar's own colours: entry x, speed, release x | bar motion and release timing |
 | `panes` | per pane, intervals of white (flash) and blue (KO card) | KO card timing, pane flashes on a send |
 | `frame` | the ring just outside the game window: mean colour where it changes | whether a send flashes the window frame |
+| `fade` | a pane's cut between two courses: the black fraction of its sky per frame, the first black frame | how an opponent's course clear is shown (doc 55) |
+| `ghosts` | each pane's ghost enemy per frame (middle, size) and the first frame of each white burst | what a send looks like on the panes (doc 55) |
 
 Use clips around the sends listed in `docs/51-battle-send-presentation.md` (section 11). Paste the printed JSON (or attach the sheets) back
 into the next milestone; every constant of the send animation lives in `BattleSendStyle` (`Scripts/Classes/Battle/BattleSendStyle.gd`)

@@ -3,9 +3,10 @@ extends RefCounted
 ## The visible side of the enemy send / receive loop, as plain data. It READS the authoritative event
 ## log (SENT, RECEIVED, INCOMING_ACTIVATED, INCOMING_RESOLVED, TARGET_CHANGED) and turns it into what the Battle
 ## screen draws: the real player's reticle flights (`player_flights`), the thin red lines of the opponents who are aiming at the real
-## player (`lines`, with WATCH OUT! for as long as there is one: doc 54), and each contestant's count of queued / active
-## incoming enemies (the real player's list is the incoming strip). A bot's send at another bot is
-## bookkept (records, counts) but never presented (doc 47 B35-ATTACK-002).
+## player (`lines`, with WATCH OUT! for as long as there is one: doc 54), the GHOST of every send at an opponent (`send_ghosts`: the sent
+## enemy flies from the sender's pane, or the game window, to the recipient's pane and bursts there: doc 55), and each contestant's count of
+## queued / active incoming enemies (the real player's list is the incoming strip). Doc 47 B35-ATTACK-002 said a bot's send at another bot
+## is never presented; the reference shows its ghost on both panes (doc 55).
 ##
 ## The session decides everything; this decides only how it looks. It never calls a mutating method
 ## of BattleSession or BattleAttackSystem, never stores a reference to an event (everything it keeps
@@ -35,6 +36,8 @@ const SPAWN_FLASH := 0.6 ## seconds the strip marks that an attack's enemy just 
 const RESOLVE_FADE := 0.5 ## seconds a just-resolved attack's icon lingers in the strip, fading
 const MAX_RESOLVED_KEPT := 6 ## a safety valve for the fading icons (a round never has this many at once)
 const LINE_SECONDS := BattleSendStyle.SECONDS ## the head of an attacker's line moves from its pane to the pill in 15 frames (measured, doc 54)
+const GHOST_SECONDS := BattleSendGhost.SECONDS + BattleSendGhost.FLASH_SECONDS ## a send's ghost flies, bursts and is gone (measured, doc 55)
+const MAX_GHOSTS := 128 ## a safety valve: a match never has this many sends in the air
 
 ## How an attack on the real player is shown. Derived from the authoritative state (`phase_of`).
 enum Phase {QUEUED, ARRIVING, IN_LEVEL, RESOLVED}
@@ -59,6 +62,7 @@ var _last_activated := -1.0e9
 var _last_activated_seq := -1
 var _resolved_recent: Array[Dictionary] = [] ## the real player's attacks that just ended, for the strip's fade
 var _animate_until := 0.0 ## presentation clock until which something timed (a flash, a fade) is still running
+var _ghosts: Array[Dictionary] = [] ## the sends at opponents still flying or bursting, oldest first: {seq, sender, target, kind, born}
 var _lines := {} ## bot id -> presentation clock at which its line to the real player started (it aims at the real player, and was seen to start)
 var _pill_since := -1.0 ## presentation clock at which the first of the current lines started: when WATCH OUT! appeared (-1: no line, no pill)
 var _targets := PackedInt32Array() ## every contestant's current target as presented: the session's initial targets, moved by TARGET_CHANGED
@@ -83,6 +87,7 @@ func update(delta: float) -> void:
 	_consume(false)
 	_prune()
 	_prune_resolved()
+	_prune_ghosts()
 	update_us = Time.get_ticks_usec() - t0
 
 ## Contestant `id`'s target as the presentation has caught up with it (-1: none).
@@ -100,6 +105,7 @@ func clear_flights() -> void:
 	_resolved_recent.clear()
 	_lines.clear()
 	_pill_since = -1.0
+	_ghosts.clear()
 
 # ---- reading the log --------------------------------------------------------------------------------
 
@@ -140,6 +146,11 @@ func _on_sent(seq: int, sender: int, target: int, kind: int, tick: int, silent: 
 		return
 	if target == BattleSession.PLAYER_ID:
 		_animate_for(RECEIVE_FLASH) # the strip's "new" outline
+	else:
+		_ghosts.append({"seq": seq, "sender": sender, "target": target, "kind": kind, "born": clock}) # a send at an opponent flies as a ghost
+		if _ghosts.size() > MAX_GHOSTS:
+			_ghosts.pop_front()
+		_animate_for(GHOST_SECONDS)
 	if sender != BattleSession.PLAYER_ID:
 		return # only the real player's send is a flight; a bot's is never drawn as one (its line is the aim, not the send)
 	for old in flights:
@@ -232,6 +243,16 @@ func _on_resolved(seq: int, cause: int, tick: int, silent := false) -> void:
 		if f != null and f.cut_at < 0.0:
 			f.cut_at = clock # the target is out: the line fades instead of landing on a KO
 
+## Drops the ghosts that have burst.
+func _prune_ghosts() -> void:
+	if _ghosts.is_empty():
+		return
+	var kept: Array[Dictionary] = []
+	for g in _ghosts:
+		if clock - float(g.born) < GHOST_SECONDS:
+			kept.append(g)
+	_ghosts = kept
+
 ## Drops flights that have finished.
 func _prune() -> void:
 	if flights.is_empty():
@@ -261,6 +282,17 @@ func player_flights() -> Array[Dictionary]:
 		if f.sender == BattleSession.PLAYER_ID and f.strength(clock) > 0.0:
 			out.append({"seq": f.seq, "target": f.target, "progress": f.eased(clock), "cut": f.cut_at >= 0.0,
 				"fade": f.strength(clock)})
+	return out
+
+## The ghosts of the sends at opponents that are still on screen, oldest first, as copies: {seq, sender (a bot's id, or 0 for the real
+## player: the ghost starts at the game window's middle), target (the authoritative recipient), kind (the Battle enemy type sent), age
+## (seconds since the send)}. A ghost flies for BattleSendGhost.SECONDS and then bursts on the recipient's pane for FLASH_SECONDS; a send
+## at the real player has none. A newer send of the real player cancelling their bracket does not touch the enemy that was sent: every
+## send has its ghost. Nothing here depends on what a pane is showing.
+func send_ghosts() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for g in _ghosts:
+		out.append({"seq": g.seq, "sender": g.sender, "target": g.target, "kind": g.kind, "age": maxf(clock - float(g.born), 0.0)})
 	return out
 
 ## Whether any of the real player's sends is still in the air.

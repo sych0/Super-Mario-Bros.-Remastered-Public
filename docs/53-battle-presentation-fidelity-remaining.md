@@ -8,6 +8,7 @@ qualification, send counts, the incoming queue, enemy spawning, bots, the timer 
 was touched.
 
 > **Closed by [doc 54](54-battle-presentation-measured-from-video.md)**: with the video available the open items of sections 2 and 5 (M1-M6) were measured: the line's endpoint (the pill) and lifetime (while its sender aims at the player; it ends the frame the sender is KO'd), WATCH OUT!'s flash timing, the bar's motion and release (no marker), the KO card's 60 fps timeline, rapid sends (one bracket, the older cancelled) and the frozen results field (option A of section 2.6: settled cards at the freeze) are built or explicitly listed as not reproduced.
+> Doc 55 later added the ghost of every enemy send (bot-to-bot included) and the previews' move to the next course.
 
 ## 0. Evidence available to this session
 

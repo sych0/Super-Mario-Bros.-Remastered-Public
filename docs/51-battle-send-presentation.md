@@ -76,6 +76,9 @@ A bot's send at the real player: **one thin solid red line** (0.5 units wide = 2
 
 ## 5. Part D — bot → bot
 
+> **Corrected by [doc 55](55-battle-opponent-previews-courses-and-send-ghosts.md):** a bot's send at another bot is drawn: a ghost of the sent enemy flies from the
+> sender's pane to the recipient's pane in 0.5 s and bursts there (the ghost is only visible where it crosses a pane, so the gaps and the window show nothing).
+
 Doc 47 B35-ATTACK-002: "no line or effect between two opponent panes was seen in any sampled frame" (strongly inferred, absence of evidence across many frames). Removed. `BattleAttackPresentation` no longer creates a flight for such a send (it still records and counts it; the previews still show the incoming enemy in the recipient's picture). `battle_ui_test`, `battle_attack_screen_test` and the GL test assert nothing is drawn, across the playfield or between panes.
 
 ## 6. Part F — old effects removed

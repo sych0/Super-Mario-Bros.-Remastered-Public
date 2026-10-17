@@ -300,7 +300,21 @@ func test_target_reticle_ko(layout: Dictionary) -> void:
 	var victim: int = session.target_of(0)
 	var img := await grab("target_02_before_ko")
 	check(victim >= 1 and red_corners(img, layout, victim) == 4, "the bracket is on the target (#%d)" % victim)
+	# an enemy is sent at the victim and it is eliminated while the ghost is in the air: the ghost goes on and arrives (the picture of a
+	# pane runs behind the session, so it still shows a live pane; the burst is the pane's, drawn on whatever it shows)
+	screen.game_frozen = true
+	var in_air = session.report_enemy_defeat(0, KIND.GOOMBA)
+	screen.attack_view.update(0.0)
+	screen.attack_view.update(0.3)
 	session.report_ko(victim, session.KoCause.HAZARD)
+	screen.attack_view.update(0.0)
+	check(in_air != null and screen.ghost_layer.drawn().size() == 1 and screen.ghost_layer.drawn()[0].target == in_air.target, "the recipient's KO does not take its ghost out of the air (sent at #%d, victim #%d, %d ghosts)" % [in_air.target if in_air != null else -1, victim, screen.ghost_layer.drawn().size()])
+	screen.attack_view.update(0.2 + 1.0 / 60.0)
+	screen.refresh()
+	await frames(2)
+	check(screen.ghost_layer.drawn().size() == 1 and screen.is_inside_tree(), "...it arrives and bursts without trouble")
+	screen.attack_view.clear_flights()
+	screen.game_frozen = false
 	var next: int = session.target_of(0)
 	advance(1)
 	await frames(24)
@@ -396,38 +410,168 @@ func test_player_send(layout: Dictionary, game: Rect2) -> void:
 func F_SECONDS() -> float:
 	return load("res://Scripts/Classes/Battle/BattleSendStyle.gd").SECONDS
 
+func is_white(c: Color) -> bool:
+	return c.r > 0.97 and c.g > 0.97 and c.b > 0.97
+
+## The area, in canvas units squared, of the pure white pixels inside `rect`.
+func white_area(img: Image, rect: Rect2) -> float:
+	var n := 0
+	for y in range(int(rect.position.y * shot_scale), int(rect.end.y * shot_scale)):
+		for x in range(int(rect.position.x * shot_scale), int(rect.end.x * shot_scale)):
+			if is_white(img.get_pixel(x, y)):
+				n += 1
+	return float(n) / (shot_scale * shot_scale)
+
+## The ghosts of enemy sends (doc 55), stepped by hand on a held clock: a bot's send at another bot, the real player's, rapid sends.
 func test_bot_send(layout: Dictionary, game: Rect2) -> void:
-	print("-- a bot's send at another bot: nothing is drawn")
+	print("-- the ghosts of sends: a bot's send at another bot, the real player's, rapid ones (doc 55)")
 	await wait_lines_gone()
 	await frames(30)
-	var base := await grab()
+	var view = screen.attack_view
+	var gl = screen.ghost_layer
+	screen.game_frozen = true # the presentation clock is held; each picture below is of an exact moment
+	var base := await grab("attack_02_baseline")
 	var sender := alive_between(1, 17, 4)
 	var target := alive_between(18, 34, 8)
 	fixed_target(target)
 	var a = session.report_enemy_defeat(sender, KIND.KOOPA)
-	await frames(8)
-	var img := await grab("attack_02_bot_send")
-	var view = screen.attack_view
-	check(view.flight_of(a.seq) == null and view.flights.is_empty() and screen.target_reticle.flying.is_empty(), "the send makes no flight and no reticle")
+	view.update(0.0)
+	screen.refresh()
+	check(view.flight_of(a.seq) == null and view.flights.is_empty() and screen.target_reticle.flying.is_empty(), "a bot's send makes no reticle flight")
+	check(gl.drawn().size() == 1 and gl.drawn()[0].sender == sender and gl.drawn()[0].target == target and gl.drawn()[0].kind == KIND.KOOPA, "...but it is a ghost, from its pane to the recipient's, of the enemy it sent")
+	var sp: Rect2 = layout.slots[sender - 1]
 	var pane: Rect2 = layout.slots[target - 1]
-	check(changed_fraction(img, base, pane.grow(-2.0)) < 0.25, "the target pane is not marked")
-	var from: Vector2 = GEO.center_of(layout, sender)
-	var to: Vector2 = GEO.center_of(layout, target)
-	var drawn := 0
-	for k in range(1, 40):
-		var p := from.lerp(to, k / 40.0)
-		if game.has_point(p) or pane.has_point(p) or (layout.slots[sender - 1] as Rect2).has_point(p):
-			continue
-		if diff(px(img, p.x, p.y), px(base, p.x, p.y)) > 0.3:
-			drawn += 1
-	check(drawn <= 2, "and no line runs between the two panes (%d changed samples along it)" % drawn)
-	var inside := 0
-	for k in range(1, 40):
-		var p := from.lerp(to, k / 40.0)
-		if game.has_point(p) and diff(px(img, p.x, p.y), px(base, p.x, p.y)) > 0.3:
-			inside += 1
-	check(inside <= 2, "nor across the player's playfield (%d changed samples)" % inside)
+	var c0: Vector2 = sp.get_center()
+	var img0 := await grab("attack_02_bot_send_age0")
+	check(changed_fraction(img0, base, Rect2(c0 - Vector2(5, 6), Vector2(10, 12)), 0.12) > 0.3, "at its first frame the ghost is in the middle of the sender's pane (%.0f %% of the middle changed)" % (changed_fraction(img0, base, Rect2(c0 - Vector2(5, 6), Vector2(10, 12)), 0.12) * 100.0))
+	check(changed_fraction(img0, base, pane.grow(-2.0), 0.12) < 0.05, "...and nothing is on the recipient's pane yet")
+	# half way: the ghost is wherever it is, and is drawn only inside panes
+	view.update(0.25)
+	screen.refresh()
+	var mid := await grab("attack_02_bot_send_age0.25")
+	var m: Vector2 = GEO_G().point(layout, sender, target, 0.5)
+	var in_pane := false
+	for r in layout.slots:
+		in_pane = in_pane or (r as Rect2).has_point(m)
+	var gap_or_window := 0
+	for k in range(1, 12):
+		var p: Vector2 = c0.lerp(pane.get_center(), k / 12.0)
+		var inside_any := false
+		for r in layout.slots:
+			inside_any = inside_any or (r as Rect2).grow(1.0).has_point(p)
+		if not inside_any and diff(px(mid, p.x, p.y), px(base, p.x, p.y)) > 0.3:
+			gap_or_window += 1
+	check(gap_or_window <= 1, "between the panes (the wallpaper, the frame, the game window) nothing is drawn along its path (%d changed samples)" % gap_or_window)
+	# it arrives: the burst on the recipient's middle, a white square
+	view.update(0.25)
+	screen.refresh()
+	var k0 := await grab("attack_02_bot_send_burst0")
+	var c1: Vector2 = pane.get_center()
+	var a0 := white_area(k0, pane.grow(-1.0))
+	check(is_white(px(k0, c1.x, c1.y)) and is_white(px(k0, c1.x + 4.0, c1.y + 4.0)) and a0 > 100.0 and a0 < 175.0, "on the frame after it arrives a white square (11.6 units: %.0f units squared) is on the recipient's middle" % a0)
+	view.update(3.0 / 60.0)
+	screen.refresh()
+	var k3 := await grab("attack_02_bot_send_burst3")
+	var a3 := white_area(k3, pane.grow(-1.0))
+	check(is_white(px(k3, c1.x + 7.0, c1.y + 8.0)) and is_white(px(k3, c1.x - 7.0, c1.y - 8.0)) and a3 > 400.0 and a3 < 560.0, "...grown to 21 x 23 units by frame 3 (%.0f units squared)" % a3)
+	view.update(3.0 / 60.0)
+	screen.refresh()
+	var k6 := await grab("attack_02_bot_send_burst6")
+	var c6 := px(k6, c1.x + 8.0, c1.y + 8.0)
+	var b6 := px(base, c1.x + 8.0, c1.y + 8.0)
+	check(not is_white(c6) and c6.g > b6.g + 0.08 and c6.b > 0.9, "by frame 6 it is a translucent light-cyan square, no longer white")
+	view.update(8.0 / 60.0)
+	screen.refresh()
+	var gone := await grab("attack_02_bot_send_gone")
+	check(gl.drawn().is_empty() and changed_fraction(gone, base, pane.grow(-2.0), 0.12) < 0.15 and changed_fraction(gone, base, sp.grow(-2.0), 0.12) < 0.15, "after the burst nothing of it is left on either pane (%.0f %% of the recipient changed)" % (changed_fraction(gone, base, pane.grow(-2.0), 0.12) * 100.0))
+	# the real player's send: the ghost is not drawn over the window; it shows on the recipient for the last frames
+	var t2 := alive_between(1, 17, 2)
+	fixed_target(t2)
+	var pa: Rect2 = layout.slots[t2 - 1]
+	var b2 = session.report_enemy_defeat(0, KIND.GOOMBA)
+	view.update(0.0)
+	screen.refresh()
+	check(gl.drawn().size() == 1 and gl.drawn()[0].sender == 0 and gl.drawn()[0].target == t2, "the real player's send is a ghost too, from the window")
+	view.update(0.1)
+	screen.refresh()
+	var early := await grab("attack_02_player_ghost_age0.1")
+	var window_changed := changed_fraction(early, base, game.grow(-4.0), 0.3)
+	check(window_changed < 0.12, "the ghost is not drawn over the game window (the reticle is there; %.0f %% of the window changed)" % (window_changed * 100.0))
+	view.update(0.3)
+	view.update(5.0 / 60.0)
+	screen.refresh()
+	var near_arrival := await grab("attack_02_player_ghost_age0.48")
+	var pc: Vector2 = pa.get_center()
+	var changed := changed_fraction(near_arrival, base, Rect2(pc - Vector2(8, 9), Vector2(16, 18)), 0.12)
+	check(changed > 0.15, "a couple of frames before its burst it is on the recipient's pane (%.0f %% of the middle changed)" % (changed * 100.0))
+	view.update(1.0 / 60.0 * 2.0)
+	screen.refresh()
+	var burst := await grab("attack_02_player_burst")
+	check(is_white(px(burst, pc.x, pc.y)), "and the burst is on the recipient's middle, 0.5 s after the send")
+	# rapid sends: a ghost for each, and the bursts come in the order of the sends
+	view.update(1.0)
+	screen.refresh()
+	var ta := alive_between(1, 17, 5)
+	var tb := alive_between(18, 34, 6)
+	var tc := alive_between(1, 17, 9)
+	fixed_target(ta)
+	session.report_enemy_defeat(0, KIND.GOOMBA)
+	view.update(0.0)
+	view.update(0.05)
+	fixed_target(tb)
+	session.report_enemy_defeat(0, KIND.KOOPA)
+	view.update(0.0)
+	view.update(0.05)
+	fixed_target(tc)
+	session.report_enemy_defeat(0, KIND.GOOMBA)
+	view.update(0.0)
+	check(gl.drawn().size() == 3 and view.player_flights().size() == 1, "three rapid sends: three ghosts, one bracket (the newest)")
+	view.update(0.4)
+	screen.refresh()
+	var shots := [await grab("attack_02_rapid_a")]
+	view.update(0.05)
+	screen.refresh()
+	shots.append(await grab("attack_02_rapid_b"))
+	view.update(0.05)
+	screen.refresh()
+	shots.append(await grab("attack_02_rapid_c"))
+	var order_ok := true
+	var ids := [ta, tb, tc]
+	var expected := [[0], [0, 1], [1, 2]] # (a burst's white square lasts four frames: 0.067 s)
+	for j in 3:
+		for i in 3:
+			var c: Vector2 = (layout.slots[ids[i] - 1] as Rect2).get_center()
+			if is_white(px(shots[j], c.x, c.y)) != (expected[j].has(i)):
+				order_ok = false
+	check(order_ok, "each burst is on its own recipient's middle, one after the other, in the order sent (A, then B, then C)")
+	# a held clock holds the ghosts: nothing moves
+	view.update(1.0)
+	var tp := alive_between(1, 17, 7)
+	fixed_target(tp)
+	session.report_enemy_defeat(0, KIND.GOOMBA)
+	view.update(0.0)
+	view.update(0.46)
+	screen.refresh()
+	var h1 := await grab("attack_02_held_1")
+	for i in 30:
+		view.update(0.0)
+		screen.refresh()
+		await process_frame
+	var h2 := await grab("attack_02_held_2")
+	var pp: Rect2 = layout.slots[tp - 1]
+	check(changed_fraction(h2, h1, pp.grow(-2.0), 0.12) < 0.1, "with the presentation clock held a ghost does not move or burst, however many frames pass (%.0f %% changed)" % (changed_fraction(h2, h1, pp.grow(-2.0), 0.12) * 100.0))
+	# the round ending clears every transient animation at once
+	view.clear_flights()
+	screen.refresh()
+	await frames(2)
+	var cleared := await grab("attack_02_cleared")
+	var cc := pp.get_center()
+	check(gl.drawn().is_empty() and not is_white(px(cleared, cc.x, cc.y)) and white_area(cleared, pp.grow(-1.0)) < 20.0, "clearing the animations (the round's end) leaves nothing of a ghost or a burst on the panes")
+	screen.game_frozen = false
 	await wait_lines_gone()
+
+func GEO_G():
+	return load("res://Scripts/Classes/Battle/BattleSendGhost.gd")
 
 func test_incoming_in_preview(layout: Dictionary) -> void:
 	print("-- an incoming enemy in an opponent's preview")

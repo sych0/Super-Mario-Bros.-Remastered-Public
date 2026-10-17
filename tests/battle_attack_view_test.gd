@@ -13,7 +13,7 @@ func choose(_session, _sender, _draw) -> int:
 	return target
 """
 const PRESENTATION_FILES := ["BattleAttackPresentation", "BattleAttackFlight", "BattleAttackGeometry", "BattleAttackLayer",
-	"BattleIncomingStrip", "BattleEnemyIcon", "BattlePreviewInvader"]
+	"BattleIncomingStrip", "BattleEnemyIcon", "BattlePreviewInvader", "BattleSendGhost", "BattleSendGhostLayer"]
 
 var failures := 0
 var S # BattleSession

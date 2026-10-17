@@ -202,6 +202,107 @@ func run_resolution(size: Vector2i, fractional: bool) -> void:
 	drop_screen(scr2)
 	await frames(3)
 
+## Distinct colours (5 bits a channel) in `img`, sampled every third pixel.
+func distinct_colours(img: Image) -> int:
+	var seen := {}
+	for y in range(0, img.get_height(), 3):
+		for x in range(0, img.get_width(), 3):
+			var c := img.get_pixel(x, y)
+			seen[(int(c.r * 31.0) << 10) | (int(c.g * 31.0) << 5) | int(c.b * 31.0)] = true
+	return seen.size()
+
+func mean_luma(img: Image) -> float:
+	var sum := 0.0
+	var n := 0
+	for y in range(0, img.get_height(), 3):
+		for x in range(0, img.get_width(), 3):
+			sum += img.get_pixel(x, y).get_luminance()
+			n += 1
+	return sum / maxf(n, 1.0)
+
+## A preview that clears its course (doc 55): the pane holds at the flagpole, darkens, and shows the next level; it is never blank and never
+## falls back to the placeholder. Read back from the real atlas and from the display.
+func test_course_transition() -> void:
+	print("-- a preview that clears its course moves on to the next one (doc 55)")
+	S.file.video.scaling = 0
+	await ensure_window(Vector2i(1920, 1080))
+	var Cell = load("res://Scripts/Classes/Battle/BattlePreviewCell.gd")
+	var Track = load("res://Scripts/Classes/Battle/BattlePreviewTrack.gd")
+	var s = SESSION.begin(19)
+	var scr = build_screen(true)
+	await frames(4)
+	var id := 6
+	s.contestants[id].progress = 0.985 # a couple of ticks from clearing World 1-1
+	var cell = scr.cells[id - 1]
+	var tr = scr.driver.tracks[id]
+	var rect: Rect2i = ATLAS.cell_rect(id - 1)
+	var placeholder_before: int = Cell.stat_placeholder_draws
+	var live_before: int = Cell.stat_live_draws
+	var before_fade: Image = null
+	var darkest := 1.0
+	var pre_luma := 0.0
+	var saw_flag := false
+	var saw_fade := false
+	var blank_frames := 0
+	var course_before: int = tr.course
+	var after: Image = null
+	var shots := 0
+	for tick in 16:
+		s.step()
+		for k in 6:
+			scr.driver.update(float(k) / 6.0)
+			cell.queue_redraw()
+			await RenderingServer.frame_post_draw
+			var pic: Image = scr.atlas.get_texture().get_image().get_region(rect)
+			var luma := mean_luma(pic)
+			saw_flag = saw_flag or tr.phase == Track.Phase.FLAG
+			saw_fade = saw_fade or tr.phase == Track.Phase.FADE
+			if tr.course == course_before and tr.phase == Track.Phase.RUN and tr.frame.fade == 0.0:
+				before_fade = pic
+				pre_luma = luma
+			if tr.phase == Track.Phase.FADE and tr.frame.fade > 0.0:
+				darkest = minf(darkest, luma)
+			elif distinct_colours(pic) < 4:
+				blank_frames += 1
+			if tr.course == course_before + 1 and after == null and tr.phase == Track.Phase.RUN:
+				after = pic
+				shots += 1
+		if after != null:
+			break
+	check(saw_flag and saw_fade, "the pane went through the flagpole and the fade")
+	check(tr.course == course_before + 1 and tr.frame.valid and tr.frame.displayed_course == tr.course, "it is on the next course (%d), live" % tr.course)
+	check(pre_luma > 0.4 and darkest < pre_luma * 0.7, "the picture really darkened between the two courses (%.2f -> %.2f)" % [pre_luma, darkest])
+	check(blank_frames == 0, "no frame of the whole clear is blank (%d frames with fewer than 4 colours outside the fade)" % blank_frames)
+	check(after != null and before_fade != null and mean_error(after.get_region(Rect2i(0, 0, 187, 240)), before_fade.get_region(Rect2i(0, 0, 187, 240))) > 0.04 and distinct_colours(after) >= 8, "the next course's picture is a different level with real detail (%d colours)" % (distinct_colours(after) if after != null else 0))
+	check(Cell.stat_placeholder_draws == placeholder_before and Cell.stat_live_draws > live_before, "the live renderer drew every frame of it: the placeholder never did (%d placeholder draws)" % (Cell.stat_placeholder_draws - placeholder_before))
+	await frames(3)
+	var img: Image = await grab("preview_after_clear")
+	var pane = scr.panes[id - 1]
+	var shown := img.get_region(pane_rect_px(pane, 3.0))
+	check(distinct_colours(shown) >= 6 and not pane.marked, "the pane on the display shows the next level, not a blank or a card (%d colours)" % distinct_colours(shown))
+	# a freeze caught mid-fade is never black: play on until another pane is in the dark, then freeze the field
+	var caught := -1
+	for tick in 40:
+		s.step()
+		for k in 15:
+			scr.driver.update(float(k) / 15.0)
+			for other in scr.driver.tracks:
+				if scr.driver.tracks[other].phase == Track.Phase.FADE and scr.driver.tracks[other].frame.fade > 0.0 and caught < 0:
+					caught = other
+			if caught >= 0:
+				break
+		if caught >= 0:
+			break
+	if caught >= 0:
+		scr._freeze_field()
+		await frames(4)
+		var cr: Rect2i = ATLAS.cell_rect(caught - 1)
+		var held: Image = scr.atlas.get_texture().get_image().get_region(cr)
+		check(scr.driver.tracks[caught].frame.fade == 0.0 and mean_luma(held) > 0.25 and distinct_colours(held) >= 8, "a pane caught in the dark by the results freeze is held on the next course, not black (%.2f, %d colours)" % [mean_luma(held), distinct_colours(held)])
+	else:
+		check(true, "(no other pane was in the dark in these ticks)")
+	drop_screen(scr)
+
 func _run() -> void:
 	await frames(5)
 	G = root.get_node("Global")
@@ -229,6 +330,7 @@ func _run() -> void:
 	await run_resolution(Vector2i(1920, 1080), false)
 	await run_resolution(Vector2i(1280, 720), false)
 	await run_resolution(Vector2i(1280, 720), true)
+	await test_course_transition()
 	G.current_game_mode = G.GameMode.NONE
 	SESSION.default_attacks_enabled = true
 	if added_pack != "":

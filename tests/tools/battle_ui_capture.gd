@@ -282,6 +282,34 @@ func _run() -> void:
 		await frames(30)
 		await grab("11f-lines-and-pill")
 		await grab("11f-lines-and-pill-bar", Rect2(0, 190, 480, 80), 2)
+	if wanted.has("12"):
+		# the ghosts of enemy sends (doc 55): the real player's send at an opponent, then a bot's send at the pane below it, stepped by hand
+		var Kind = load("res://Scripts/Classes/Battle/BattleEnemyType.gd").Kind
+		var layout_g: Dictionary = screen.layout
+		var target_g := 33
+		fixed_target(target_g)
+		await frames(40)
+		screen.game_frozen = true
+		session.report_enemy_defeat(0, Kind.GOOMBA)
+		screen.attack_view.update(0.0)
+		var pane_g: Rect2 = layout_g.slots[target_g - 1]
+		var t_g := 0.0
+		for step in [["12a-age0.417", 25.0], ["12b-age0.450", 2.0], ["12c-age0.483", 2.0], ["12d-age0.500", 1.0], ["12e-age0.517", 1.0], ["12f-age0.533", 1.0], ["12g-age0.550", 1.0], ["12h-age0.567", 1.0], ["12i-age0.600", 2.0], ["12j-age0.633", 2.0], ["12k-age0.667", 2.0]]:
+			screen.attack_view.update(step[1] / 60.0)
+			t_g += step[1] / 60.0
+			screen.refresh()
+			await grab(step[0], pane_g.grow(4.0), 8)
+		screen.attack_view.clear_flights()
+		screen.refresh()
+		await frames(2)
+		fixed_target(23)
+		session.report_enemy_defeat(20, Kind.KOOPA)
+		screen.attack_view.update(0.0)
+		for step in [["12m-bot-age0.000", 0.0], ["12n-bot-age0.100", 6.0], ["12o-bot-age0.200", 6.0], ["12p-bot-age0.300", 6.0], ["12q-bot-age0.400", 6.0], ["12r-bot-age0.500", 6.0], ["12s-bot-age0.550", 3.0]]:
+			screen.attack_view.update(step[1] / 60.0)
+			screen.refresh()
+			await grab(step[0], Rect2(372, 48, 40, 96), 6)
+		screen.game_frozen = false
 	if wanted.has("10"):
 		# the results: the field must look exactly as it did when the round ended (doc 51)
 		await grab("10a-before-death")

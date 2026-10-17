@@ -13,6 +13,8 @@ Needs: python3, numpy, ffmpeg + ffprobe on the PATH.
   python3 tools/reference/measure_reference.py reference.mp4 --start 746 --end 756 --mode bar
   python3 tools/reference/measure_reference.py reference.mp4 --start 524 --end 528 --mode panes
   python3 tools/reference/measure_reference.py reference.mp4 --start 515 --end 530 --mode frame
+  python3 tools/reference/measure_reference.py reference.mp4 --start 657.2 --end 657.6 --mode fade
+  python3 tools/reference/measure_reference.py reference.mp4 --start 515.5 --end 516.1 --mode ghosts
 
 Modes (all positions are in the 480x270 canvas units of the Battle screen = 1080p / 4; the video is rescaled to 1920x1080 first):
   reticle  every red four-corner bracket per frame (box, size, thickness, which pane it is on or "air"), and the FLIGHTS between
@@ -22,6 +24,10 @@ Modes (all positions are in the 480x270 canvas units of the Battle screen = 1080
   bar      the incoming bar (strip A): icons as blobs against the bar's own colours, tracked over time: entry x, speed, release x.
   panes    per pane: white-flash and blue-card intervals (the KO animation), with frame counts.
   frame    the ring just outside the game window: mean colour per frame (a frame flash), reported only where it changes.
+  fade     a pane clearing its course (doc 55): the black fraction of its sky on each frame of a fade to black (0.027 / 0.158 / 0.301 / 0.521 /
+           1 / 1 on t=657.333-657.417), and the first black frame. Panes with a blue sky only.
+  ghosts   the translucent ghost enemy of a send, per pane and frame (its middle and size in canvas units), and the first frame of each
+           white burst with its box and its middle as a fraction of the pane (doc 55).
 """
 import argparse
 import json
@@ -451,7 +457,80 @@ def mode_frame(path, a, fps_arg):
     return {"mode": "frame", "fps": fps, "changes": out}
 
 
-MODES = {"reticle": mode_reticle, "lines": mode_lines, "bar": mode_bar, "panes": mode_panes, "frame": mode_frame}
+
+# ---- fade (a pane clearing its course: doc 55) -------------------------------------------------------------------------------
+
+def mode_fade(path, a, fps_arg):
+    """Per pane, the cut between two courses: the black fraction of the sky (the picture's own blue channel against 255) on every
+    frame of a fade that goes from clear sky to black in at most 10 frames. Only panes with a blue sky can be read (an underground
+    level has no sky to darken)."""
+    info = probe(path)
+    fps = fps_arg or info["fps"]
+    series = {pid: [] for pid, *_ in PANES}
+    for t, fr in frames(path, a.start, a.end, fps_arg):
+        for pid, px_, py_, pw, ph in PANES:
+            x0, x1 = int((px_ + 0.12 * pw) * U), int((px_ + 0.45 * pw) * U)
+            y0, y1 = int((py_ + 0.28 * ph) * U), int((py_ + 0.40 * ph) * U)
+            series[pid].append((t, float(fr[y0:y1, x0:x1, 2].mean())))
+    events = {}
+    for pid, s in series.items():
+        found = []
+        i = 0
+        while i < len(s):
+            if s[i][1] >= 250.0:
+                j = i + 1
+                while j < len(s) and j - i <= 10 and s[j][1] > 3.0:
+                    j += 1
+                if j < len(s) and j - i <= 10 and s[j][1] <= 3.0 and j - i >= 2:
+                    k = i
+                    while k < j and s[k][1] >= 250.0:
+                        k += 1 # the last clear frame is the one before the first dark one
+                    found.append({"first_dark_frame": round(s[k][0], 4),
+                                  "black_fraction_per_frame": [round(1.0 - v / 255.0, 3) for _, v in s[k:min(j + 2, len(s))]],
+                                  "first_black_frame": round(s[j][0], 4)})
+                    i = j
+            i += 1
+        if found:
+            events[str(pid)] = found
+    return {"mode": "fade", "fps": fps, "fades": events}
+
+
+# ---- ghosts (an enemy send's picture, doc 55) --------------------------------------------------------------------------------
+
+def mode_ghosts(path, a, fps_arg):
+    """Per pane: the translucent grey-teal ghost enemy (its middle and size, per frame it is seen) and the white square that bursts
+    where it arrives (the first frame of each, the size of the white box and its middle as a fraction of the pane)."""
+    info = probe(path)
+    fps = fps_arg or info["fps"]
+    tracks = {pid: [] for pid, *_ in PANES}
+    bursts = {pid: [] for pid, *_ in PANES}
+    quiet = {pid: 99 for pid, *_ in PANES}
+    for t, fr in frames(path, a.start, a.end, fps_arg):
+        for pid, px_, py_, pw, ph in PANES:
+            x0, y0 = int(px_ * U) + 3, int(py_ * U) + 3
+            sub = fr[y0:int((py_ + ph) * U) - 3, x0:int((px_ + pw) * U) - 3].astype(np.int16)
+            r, g, b = sub[..., 0], sub[..., 1], sub[..., 2]
+            grey = (abs(r - g) < 26) & (b - r >= 0) & (b - r < 70) & (r > 105) & (r < 250)
+            comps = [c for c in components(grey, block=3) if c["n"] >= 150]
+            if comps:
+                c = max(comps, key=lambda c: c["n"])
+                bx0, by0, bx1, by1 = c["box"]
+                tracks[pid].append({"t": round(t, 4), "x": round(px_ + (c["pts"][:, 0].mean() + 3) / U, 2), "y": round(py_ + (c["pts"][:, 1].mean() + 3) / U, 2),
+                                    "w": to_units(bx1 - bx0), "h": to_units(by1 - by0)})
+            white = (r > 245) & (g > 245) & (b > 245)
+            hh, ww = white.shape
+            white[:int(0.15 * hh)] = False # (the pane's own top row holds a white cloud and the HUD)
+            white[int(0.85 * hh):] = False
+            frac = float(white.mean())
+            if frac > 0.04 and quiet[pid] >= 3:
+                ys, xs = np.nonzero(white)
+                bursts[pid].append({"t": round(t, 4), "white_box_units": [to_units(xs.max() - xs.min() + 1), to_units(ys.max() - ys.min() + 1)],
+                                    "middle_fraction": [round(float(xs.mean()) / sub.shape[1], 2), round(float(ys.mean()) / sub.shape[0], 2)]})
+            quiet[pid] = 0 if frac > 0.04 else quiet[pid] + 1
+    return {"mode": "ghosts", "fps": fps, "ghost_tracks": {str(k): v for k, v in tracks.items() if v}, "bursts": {str(k): v for k, v in bursts.items() if v}}
+
+
+MODES = {"reticle": mode_reticle, "lines": mode_lines, "bar": mode_bar, "panes": mode_panes, "frame": mode_frame, "fade": mode_fade, "ghosts": mode_ghosts}
 
 
 def main():

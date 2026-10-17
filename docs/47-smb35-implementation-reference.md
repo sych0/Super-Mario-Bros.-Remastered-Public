@@ -552,6 +552,10 @@ t=515, t=760 and t=1000.
 
 ### B35-ATTACK-002 — Bot→bot sends are not drawn
 
+> **Corrected by doc 55 (60 fps video):** wrong. A bot's send at another bot is a ghost of the sent enemy flying from the sender's pane to the
+> recipient's pane in 0.5 s and bursting there; the real player's sends are ghosts too. Nothing is drawn in the gaps between panes (the ghost is only seen
+> where it crosses a pane), which is why sheets of the gaps showed nothing.
+
 * **REFERENCE**: no line or effect between two opponent panes was seen in any sampled frame. Only red lines toward the
   player's bar (B35-INCOMING-004) and the player's own reticle flights appear.
 * **CURRENT**: *differs*. Bot→bot sends draw thin white pane-to-pane lines (a quarter strength across the window), at
