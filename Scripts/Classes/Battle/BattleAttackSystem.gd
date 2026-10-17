@@ -42,6 +42,7 @@ const DEFEATS_PER_LEVEL := 5.0 ## a bot defeats this many enemies per level of p
 const BOT_SALT := 0x5DEECE66D
 const PLAYER_SALT := 0x2545F4914F6CDD1D
 const DRAWS_PER_BOT := 3 ## defeat roll, enemy kind, target pick
+const WORLD_SALT := 0x3C6EF372FE94F82B
 
 var enabled := true
 ## Whether the simulated bots defeat enemies and send them (the real player's defeats always can).
@@ -52,6 +53,8 @@ var bots_send := true
 var pressure_enabled := true
 var bot_rng := RandomNumberGenerator.new()
 var player_rng := RandomNumberGenerator.new()
+var world_rngs := {} ## world-driven opponent id -> its own target stream
+var base_seed := 0 ## the session seed the streams derive from
 ## Who each send goes to and who each contestant aims at: by default a router over the player's
 ## four modes (bots always Random); a test can replace it with any BattleTargeting.
 var targeting: BattleTargeting = BattleTargetingModes.new()
@@ -67,14 +70,24 @@ var queues: Array = [] ## per contestant: Array[BattleAttack] of its unresolved 
 
 func _init(seed_value: int, contestant_count: int, enabled_ := true) -> void:
 	enabled = enabled_
+	base_seed = seed_value
 	bot_rng.seed = seed_value ^ BOT_SALT
 	player_rng.seed = seed_value ^ PLAYER_SALT
 	for i in contestant_count:
 		queues.append([] as Array[BattleAttack])
 
-## The stream `sender`'s random draws come from.
-func rng_for(sender: int) -> RandomNumberGenerator:
-	return player_rng if sender == BattleSession.PLAYER_ID else bot_rng
+## The stream `sender`'s random draws come from. A world-driven opponent (doc 56) defeats enemies when its game says so,
+## not at the bots' fixed rate, so its picks come from a stream of its own and never shift the bot stream.
+func rng_for(sender: int, session: BattleSession = null) -> RandomNumberGenerator:
+	if sender == BattleSession.PLAYER_ID:
+		return player_rng
+	if session != null and session.contestants[sender].world_driven:
+		if not world_rngs.has(sender):
+			var r := RandomNumberGenerator.new()
+			r.seed = hash([base_seed ^ WORLD_SALT, sender])
+			world_rngs[sender] = r
+		return world_rngs[sender]
+	return bot_rng
 
 # ---- targets (doc 47 B35-TARGET-001 / 007) -----------------------------------------------------
 
@@ -137,7 +150,7 @@ func note_incoming_kill(source: int) -> void:
 func report_defeat(session: BattleSession, sender: int, kind: int) -> BattleAttack:
 	if not _can_send(session, sender, kind):
 		return null
-	return _send(session, sender, kind, rng_for(sender).randf())
+	return _send(session, sender, kind, rng_for(sender, session).randf())
 
 func _can_send(session: BattleSession, sender: int, kind: int) -> bool:
 	return enabled and not round_ended and BattleEnemyType.is_supported(kind) \
@@ -202,7 +215,7 @@ func step(session: BattleSession) -> void:
 		var kept: Array[BattleAttack] = []
 		var active := 0
 		for attack in queue:
-			if attack.state == BattleAttack.State.ACTIVE and id != BattleSession.PLAYER_ID \
+			if attack.state == BattleAttack.State.ACTIVE and not session.is_real(id) \
 					and tick >= attack.activated_tick + BattleEnemyType.active_ticks(attack.kind):
 				_resolve(session, attack, BattleAttack.Resolution.EXPIRED)
 			else:
@@ -230,11 +243,11 @@ func on_contestant_out(session: BattleSession, id: int) -> void:
 ## player's level. Refused (false, nothing changed) unless the attack exists, is aimed at the real
 ## player, is ACTIVE, has not been spawned before, and the round is open: a second report for the
 ## same attack can never make a second enemy count.
-func mark_spawned(session: BattleSession, seq: int) -> bool:
+func mark_spawned(session: BattleSession, seq: int, target := BattleSession.PLAYER_ID) -> bool:
 	if not enabled or round_ended or seq < 0 or seq >= history.size():
 		return false
 	var attack: BattleAttack = history[seq]
-	if attack.target != BattleSession.PLAYER_ID or attack.state != BattleAttack.State.ACTIVE or attack.spawned_tick >= 0:
+	if attack.target != target or not session.is_real(target) or attack.state != BattleAttack.State.ACTIVE or attack.spawned_tick >= 0:
 		return false
 	attack.spawned_tick = session.tick_count
 	session.record(BattleSession.EventType.INCOMING_SPAWNED, attack.target, attack.seq, attack.sender, {"kind": attack.kind})

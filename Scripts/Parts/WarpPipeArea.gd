@@ -29,6 +29,8 @@ func update_visuals() -> void:
 		hide()
 
 func run_player_check(player: Player) -> void:
+	if not GameWorld.owns_globals(self):
+		return # a warp zone moves the real game to another course; a Battle opponent's course order is the session's (doc 56)
 	if Global.player_action_pressed(get_input_direction(enter_direction), player.player_id) and can_enter:
 		can_enter = false
 		Checkpoint.passed_checkpoints.clear()

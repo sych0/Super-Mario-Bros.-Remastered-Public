@@ -16,8 +16,12 @@ var can_transition := false
 static var is_transitioning := false
 
 func _ready() -> void:
-	Global.level_sequence_captured = false
-	await Global.level_complete_begin
+	var main := GameWorld.owns_globals(self)
+	if main:
+		Global.level_sequence_captured = false
+	await GameWorld.level_complete(self)
+	if not main:
+		return # a Battle opponent's game cuts to its next course at the flag (doc 55, doc 56): no castle sequence
 	Global.level_sequence_captured = true
 	$Overlay.visible = not use_sprite
 	$OverlaySprite.visible = use_sprite
@@ -30,7 +34,7 @@ func _ready() -> void:
 	time_save = Global.time
 
 func update_cam_limit() -> void:
-	if Player.camera_right_limit > $CameraRightLimit.global_position.x:
+	if GameWorld.camera_right_limit(self) > $CameraRightLimit.global_position.x:
 		$CameraRightLimit._enter_tree()
 
 func _process(_delta: float) -> void:
@@ -93,7 +97,8 @@ func spawn_one_up_note() -> void:
 	owner.add_sibling(note)
 
 func _exit_tree() -> void:
-	is_transitioning = false
+	if GameWorld.owns_globals(self): # (a Battle opponent's castle never takes part in the real game's transition)
+		is_transitioning = false
 
 func show_fireworks(amount := 0) -> void:
 	for i in amount:

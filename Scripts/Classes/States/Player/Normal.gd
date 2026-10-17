@@ -33,9 +33,10 @@ func physics_update(delta: float) -> void:
 func handle_death_pits() -> void:
 	if Warper.warping:
 		return
-	if player.global_position.y > 64 and Global.current_level.room_type != Level.RoomType.COIN_HEAVEN and player.gravity_vector == Vector2.DOWN:
+	var level := GameWorld.level(player)
+	if player.global_position.y > 64 and level.room_type != Level.RoomType.COIN_HEAVEN and player.gravity_vector == Vector2.DOWN:
 		player.die(true)
-	elif player.global_position.y < Global.current_level.vertical_height - 32 and player.gravity_vector == Vector2.UP:
+	elif player.global_position.y < level.vertical_height - 32 and player.gravity_vector == Vector2.UP:
 		player.die(true)
 
 func handle_movement(delta: float) -> void:
@@ -80,8 +81,8 @@ func grounded(delta: float) -> void:
 	if not player.crouching:
 		if Global.player_action_pressed("move_down", player.player_id):
 			player.crouching = true
-			AudioManager.play_sfx("crouch", player.global_position)
-			AudioManager.kill_sfx("uncrouch")
+			GameWorld.sfx(player, "crouch", player.global_position)
+			GameWorld.kill_sfx(player, "uncrouch")
 	else:
 		can_wall_push = player.test_move(player.global_transform, Vector2.UP * 8 * player.gravity_vector.y) and player.physics_params("CAN_BE_WALL_EJECTED")
 		if Global.player_action_pressed("move_down", player.player_id) == false:
@@ -90,8 +91,8 @@ func grounded(delta: float) -> void:
 			else:
 				wall_pushing = false
 				player.crouching = false
-				AudioManager.play_sfx("uncrouch", player.global_position)
-				AudioManager.kill_sfx("crouch")
+				GameWorld.sfx(player, "uncrouch", player.global_position)
+				GameWorld.kill_sfx(player, "crouch")
 		else:
 			player.crouching = true
 			wall_pushing = false
@@ -100,13 +101,13 @@ func grounded(delta: float) -> void:
 	if not player.looking_up:
 		if Global.player_action_pressed("move_up", player.player_id) and not player.crouching:
 			player.looking_up = true
-			AudioManager.play_sfx("look_up", player.global_position)
-			AudioManager.kill_sfx("stop_look_up")
+			GameWorld.sfx(player, "look_up", player.global_position)
+			GameWorld.kill_sfx(player, "stop_look_up")
 	else:
 		if not Global.player_action_pressed("move_up", player.player_id) and not player.crouching:
 			player.looking_up = false
-			AudioManager.play_sfx("stop_look_up", player.global_position)
-			AudioManager.kill_sfx("look_up")
+			GameWorld.sfx(player, "stop_look_up", player.global_position)
+			GameWorld.kill_sfx(player, "look_up")
 
 func handle_ground_movement(delta: float) -> void:
 	var skid_conditions = sign(player.input_direction * player.velocity_direction) < 0.0 and abs(player.velocity.x) > player.physics_params("SKID_THRESHOLD") if not player.physics_params("CLASSIC_SKID_CONDITIONS") else sign(player.direction * player.velocity_direction) < 0.0
@@ -129,7 +130,7 @@ func ground_acceleration(delta: float) -> void:
 	if ((Global.player_action_pressed("run", player.player_id) or run_buffer > 0) and walk_speed_requirement) and (not player.in_water and player.flight_meter <= 0) and player.can_run:
 		target_move_speed = player.physics_params("RUN_SPEED")
 		target_accel = player.physics_params("GROUND_RUN_ACCEL")
-	if Player.pipe_cutscene:
+	if GameWorld.pipe_cutscene(player):
 		target_move_speed = player.physics_params("PIPE_CUTSCENE_MOVE_SPEED", player.COSMETIC_PARAMETERS)
 	if player.input_direction != player.velocity_direction:
 		if (Global.player_action_pressed("run", player.player_id) or run_buffer > 0) and player.can_run:
@@ -233,7 +234,7 @@ func air_acceleration(delta: float) -> void:
 
 func handle_swimming(delta: float) -> void:
 	bubble_meter += delta
-	if bubble_meter >= 1 and player.flight_meter <= 0 and player.global_position.y >= Global.current_level.vertical_height + 64:
+	if bubble_meter >= 1 and player.flight_meter <= 0 and player.global_position.y >= GameWorld.level(player).vertical_height + 64:
 		player.summon_bubble()
 		bubble_meter = 0
 	if swim_up_meter > 0:
@@ -251,7 +252,7 @@ func swim_acceleration(delta: float) -> void:
 
 func swim_up() -> void:
 	player.velocity.y = -player.physics_params("SWIM_HEIGHT") * player.gravity_vector.y
-	AudioManager.play_sfx("swim", player.global_position)
+	GameWorld.sfx(player, "swim", player.global_position)
 	swim_up_meter = 0
 	if player.swim_stroke:
 		handle_animations()

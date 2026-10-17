@@ -148,6 +148,7 @@ static func start_match() -> void:
 	Global.level_num = 1
 	Global.reset_values()
 	BattleSession.begin(new_seed(previous_seed))
+	BattleBotDirector.configure(BattleSession.current) # the opponents that play a real game (doc 56), before the first tick
 	presentation_alpha = 0.0
 	PipeCutscene.seen_cutscene = false
 	Level.first_load = true # a win leaves no death to set it: 1-1 must start as a fresh level

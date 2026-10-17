@@ -114,16 +114,18 @@ func _ready() -> void:
 			else:
 				primary_layer = 0
 		get_parent().move_child(self, 0)
-		Global.level_theme_changed.connect(update_visuals)
+		if GameWorld.owns_globals(self): # a Battle opponent's level keeps its own theme (doc 56)
+			Global.level_theme_changed.connect(update_visuals)
 		update_visuals()
 	handle_disco_visuals(1)
 
 func _physics_process(delta: float) -> void:
 	handle_disco_visuals(delta)
 	if Engine.is_editor_hint() == false:
-		if Global.current_level != null:
+		var level := GameWorld.level(self)
+		if level != null:
 			var frame = $TopEdge/Sprite.sprite_frames.get_frame_texture($TopEdge/Sprite.animation, 0)
-			$TopEdge/Sprite.position.y = Global.current_level.vertical_height - 32
+			$TopEdge/Sprite.position.y = level.vertical_height - 32
 			$TopEdge.repeat_size.x = frame.get_width()
 			$TopEdge.repeat_times = (ceil(get_viewport_rect().size.x / $TopEdge.repeat_size.x) + 1) * 2
 		var repeat_times = (ceil(get_viewport_rect().size.x / 512) + 1) * 2

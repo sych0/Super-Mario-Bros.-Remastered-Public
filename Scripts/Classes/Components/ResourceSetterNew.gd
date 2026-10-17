@@ -52,7 +52,7 @@ func _init() -> void:
 	set_process_mode(Node.PROCESS_MODE_ALWAYS)
 
 func _ready() -> void:
-	if mode != ResourceMode.THEME:
+	if mode != ResourceMode.THEME and GameWorld.owns_globals(self): # a Battle opponent's level keeps its own theme (doc 56)
 		Global.level_theme_changed.connect(update_resource)
 
 func _enter_tree() -> void:
@@ -68,10 +68,17 @@ func update_resource() -> void:
 	randomize()
 	if is_inside_tree() == false or is_queued_for_deletion() or json_path == "" or node_to_affect == null:
 		return
+	# A Battle opponent's game (doc 56) is skinned by its own level's theme, not the real player's: Global's skin inputs
+	# are its world's while this resolves.
+	var bot := GameWorld.bot_of(self)
+	var saved := bot.push_skin() if bot != null else []
+	_update_resource()
+	if bot != null:
+		BattleBotWorld.pop_skin(saved)
+
+func _update_resource() -> void:
 	if state != [Global.level_theme, Global.theme_time, Global.current_room_type]:
-		cache.clear()
-		active_flags.clear()
-		property_cache.clear()
+		_use_state_cache([Global.level_theme, Global.theme_time, Global.current_room_type])
 	if node_to_affect != null:
 		var json: JSON = load(json_path)
 		# DawnLR: Load backup if the json path doesn't return a file.
@@ -589,7 +596,21 @@ func create_sprite_frames_from_image(image: Resource, animation_json := {}, reso
 	sprite_frames.set_meta("loop_offsets", loop_offsets)
 	return sprite_frames
 
+## The caches of each skin state (theme, time, room), so games of different themes can be resolved in turn without throwing
+## each other's away. A state seen for the first time starts empty, exactly as the caches used to be cleared on a change.
+static var _state_caches := {}
+
+static func _use_state_cache(new_state: Array) -> void:
+	var key := str(new_state)
+	if not _state_caches.has(key):
+		_state_caches[key] = [{}, [], {}]
+	var entry: Array = _state_caches[key]
+	cache = entry[0]
+	active_flags = entry[1]
+	property_cache = entry[2]
+
 static func clear_cache() -> void:
+	_state_caches.clear()
 	for i in cache.keys():
 		if cache[i] == null:
 			cache.erase(i)

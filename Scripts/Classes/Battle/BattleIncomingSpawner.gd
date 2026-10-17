@@ -23,6 +23,9 @@ extends Node
 ## and the session resolves the attack from the kill. A level transition ends the spawned ones
 ## (BattleHandler._exit_tree), and the session ends everything when the player is out or the round ends.
 ## It never creates, targets, orders or times out an attack.
+##
+## The same node serves a world-driven opponent's own game (doc 56): attached to that game's level with `target` = the
+## opponent's id, it makes the attacks on that opponent real enemies in its level, from its camera and its physics.
 
 const DELIVERABLE_STATES := ["Normal", "WallSlide", "Climb"]
 const TERRAIN_MASK := 2 ## tiles, blocks and pipes: what enemies stand on
@@ -45,6 +48,7 @@ static var show_arrival := true
 static var force_process := false
 
 var session: BattleSession = null
+var target := BattleSession.PLAYER_ID ## whose attacks become enemies here: the real player, or a world-driven opponent
 var plan := BattleIncomingPlan.new()
 var live := {} ## seq -> the real enemy node of that attack, in this level
 var spawn_log: Array[Dictionary] = [] ## {seq, kind, sender, frame, clock, position, direction, side, relaxed}
@@ -61,11 +65,12 @@ var _off_right := {} ## seq -> seconds spent ahead of the view
 var _handler: Node = null
 var _shape := RectangleShape2D.new()
 
-## Adds a spawner to `handler` (a BattleHandler in a Battle level) for `session_`.
-static func attach(handler: Node, session_: BattleSession) -> BattleIncomingSpawner:
+## Adds a spawner to `handler` (a BattleHandler in a Battle level; for an opponent's game, its level) for `session_`.
+static func attach(handler: Node, session_: BattleSession, target_ := BattleSession.PLAYER_ID) -> BattleIncomingSpawner:
 	var spawner := BattleIncomingSpawner.new()
 	spawner.name = "BattleIncomingSpawner"
 	spawner.session = session_
+	spawner.target = target_
 	handler.add_child(spawner)
 	return spawner
 
@@ -80,16 +85,25 @@ func _exit_tree() -> void:
 	_off_right.clear()
 
 func level() -> Node:
+	if target != BattleSession.PLAYER_ID:
+		return GameWorld.level(self)
 	return _handler.get_parent() if _handler != null else null
 
 func player() -> Node2D:
-	return get_tree().get_first_node_in_group("Players") as Node2D
+	return GameWorld.first_player(self) as Node2D
 
-## Whether the real player is in normal play, so an enemy may appear.
+## Whether this game's level is being left at its flag.
+func _level_completed() -> bool:
+	var bot := GameWorld.bot_of(self)
+	if bot != null:
+		return bot.is_clearing()
+	return _handler != null and bool(_handler.get("level_completed"))
+
+## Whether the target is in normal play, so an enemy may appear.
 func deliverable() -> bool:
-	if session == null or session.finished or session.attacks.round_ended or not session.get_player().alive:
+	if session == null or session.finished or session.attacks.round_ended or not session.contestants[target].alive:
 		return false
-	if _handler == null or _handler.get("level_completed"):
+	if _handler == null or _level_completed():
 		return false
 	var p := player()
 	if p == null or p.get("is_dead") or p.get("in_cutscene"):
@@ -110,7 +124,7 @@ func _physics_process(delta: float) -> void:
 		return
 	var t0 := Time.get_ticks_usec()
 	plan.advance(delta, deliverable())
-	var rows := session.get_incoming(BattleSession.PLAYER_ID)
+	var rows := session.get_incoming(target)
 	var active := {}
 	for r in rows:
 		if int(r.state) == BattleAttack.State.ACTIVE:
@@ -137,7 +151,7 @@ func _watch(active: Dictionary, view: Rect2, delta: float) -> void:
 		if node == null or not node.is_inside_tree() or node.is_queued_for_deletion():
 			# Every kill path reports before the enemy goes, so gone while ACTIVE is never a kill. At the
 			# flag the game clears the screen itself: that ends with the level (LEVEL_TRANSITION) instead.
-			if not _handler.get("level_completed"):
+			if not _level_completed():
 				_despawn(seq, null, "vanished")
 			else:
 				_forget(seq)
@@ -166,7 +180,7 @@ func _left_limit() -> float:
 	return LEFT_BEHIND_SECONDS_BACKSCROLL if lvl != null and lvl.get("can_backscroll") == true else LEFT_BEHIND_SECONDS
 
 func _despawn(seq: int, node: Node, why: String) -> void:
-	if session.resolve_player_incoming(seq, BattleAttack.Resolution.DESPAWNED):
+	if session.resolve_incoming_on(target, seq, BattleAttack.Resolution.DESPAWNED):
 		resolve_log.append({"seq": seq, "cause": BattleAttack.Resolution.DESPAWNED, "why": why, "frame": Engine.get_physics_frames()})
 	if node != null and is_instance_valid(node) and not node.is_queued_for_deletion():
 		node.queue_free()
@@ -204,7 +218,7 @@ func _deliver(active: Dictionary, view: Rect2) -> void:
 		return
 	BattleAttribution.tag_incoming(node, session.uid, seq, int(row.sender), kind)
 	BattleEnemyFactory.add(node, level(), spot.position)
-	if not session.report_player_incoming_spawned(seq):
+	if not session.report_incoming_spawned(target, seq):
 		node.get_parent().remove_child(node) # the session already has an enemy for this attack: never two
 		node.free()
 		plan.on_spawned(seq) # and never try this seq again here

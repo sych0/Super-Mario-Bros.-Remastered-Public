@@ -83,6 +83,10 @@ static var can_set_time := true
 @export_storage var enforce_resolution := Vector2.ZERO
 
 func _enter_tree() -> void:
+	var bot := GameWorld.bot_of(self)
+	if bot != null:
+		bot.on_level_entering(self) # a Battle opponent's level (doc 56): its world holds what this would set in Global
+		return
 	Global.level_metadata.clear()
 	Level.extra_music = null
 	Global.current_level = self

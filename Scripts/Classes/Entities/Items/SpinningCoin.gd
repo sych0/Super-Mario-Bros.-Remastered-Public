@@ -7,9 +7,9 @@ var velocity := Vector2(0, -300)
 var can_spawn_particles := true
 
 func _ready() -> void:
-	Global.coins += 1
-	Global.score += 200
-	AudioManager.play_sfx("coin", global_position)
+	GameWorld.add_coins(self, 1)
+	GameWorld.add_score(self, 200)
+	GameWorld.sfx(self, "coin", global_position)
 
 func _physics_process(delta: float) -> void:
 	if get_node_or_null("Sprite") != null:

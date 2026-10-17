@@ -27,6 +27,10 @@ var incoming := 0
 ## is in, it is out, or the attack loop is off). Owned by BattleAttackSystem (doc 47 B35-TARGET-001).
 var target_id := -1
 
+## This opponent plays a real game (a BattleBotWorld, doc 56): the session rolls nothing for it, and its progress,
+## power, clears and KO are reported by its game, as the real player's are.
+var world_driven := false
+
 ## True if this contestant out-ranks `other` while both are still in the running.
 func outranks(other: BattleContestant) -> bool:
 	if levels_cleared != other.levels_cleared:
@@ -53,4 +57,5 @@ func copy() -> BattleContestant:
 	c.ko_by = ko_by
 	c.incoming = incoming
 	c.target_id = target_id
+	c.world_driven = world_driven
 	return c

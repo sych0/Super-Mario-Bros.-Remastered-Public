@@ -633,25 +633,29 @@ var swim_stroke := false
 
 var simulated_velocity := Vector2.ZERO
 
+var _feet: Array[Node] = [] ## this Mario's StepCollision shapes
+
 func _ready() -> void:
 	get_viewport().size_changed.connect(recenter_camera)
 	show()
 	$Checkpoint/Label.text = str(player_id + 1)
-	$Checkpoint/Label.modulate = [Color("5050FF"), Color("F73910"), Color("1A912E"), Color("FFB762")][player_id]
+	$Checkpoint/Label.modulate = [Color("5050FF"), Color("F73910"), Color("1A912E"), Color("FFB762")][player_id % 4]
 	$Checkpoint/Label.visible = Global.connected_players > 1
-	character = CHARACTERS[int(Global.player_characters[player_id])]
+	_feet.assign(get_children().filter(func(n: Node) -> bool: return n.is_in_group("StepCollision")))
+	character = CHARACTERS[GameWorld.character_index(self)]
 	set_animation_fallbacks()
 	apply_character_physics()
 	apply_character_sfx_map()
 	cooldown = false
-	Global.can_pause = true
-	Global.can_time_tick = true
-	Global.level_theme_changed.connect(apply_character_physics)
-	Global.level_theme_changed.connect(apply_character_sfx_map)
-	Global.level_theme_changed.connect(set_power_state_frame)
-	if Global.current_level.first_load and Global.current_game_mode == Global.GameMode.MARATHON_PRACTICE:
+	if GameWorld.owns_globals(self): # a Battle opponent's Mario (doc 56) leaves the real game's state alone
+		Global.can_pause = true
+		Global.can_time_tick = true
+		Global.level_theme_changed.connect(apply_character_physics)
+		Global.level_theme_changed.connect(apply_character_sfx_map)
+		Global.level_theme_changed.connect(set_power_state_frame)
+	if Global.current_game_mode == Global.GameMode.MARATHON_PRACTICE and Global.current_level.first_load:
 		Global.player_power_states[player_id] = "0"
-	var cur_power_state = int(Global.player_power_states[player_id])
+	var cur_power_state = GameWorld.stored_power(self)
 	power_state = get_node("PowerStates/" + physics_params("STARTING_POWER_STATE", POWER_PARAMETERS))
 	power_state = $PowerStates.get_node(POWER_STATES[cur_power_state])
 	if Global.current_game_mode == Global.GameMode.LEVEL_EDITOR:
@@ -661,7 +665,7 @@ func _ready() -> void:
 	handle_invincible_palette()
 	if Global.level_editor == null:
 		recenter_camera()
-	if pipe_cutscene:
+	if GameWorld.pipe_cutscene(self):
 		state_machine.transition_to("PipeCutscene")
 
 # SkyanUltra: Helper function for getting physics params.
@@ -730,7 +734,7 @@ func has_param(type: String, params_dict: Dictionary = {}, key: String = "") -> 
 func apply_character_physics() -> void:
 	var apply_gameplay_changes = true
 	var path = "res://Assets/Sprites/Players/" + character + "/CharacterInfo.json"
-	if int(Global.player_characters[player_id]) > 3:
+	if GameWorld.character_index(self) > 3:
 		path = path.replace("res://Assets/Sprites/Players", Global.config_path.path_join("custom_characters/"))
 	path = ResourceSetter.get_pure_resource_path(path)
 	var json = JSONParser.parse_to_dict(path)
@@ -889,6 +893,8 @@ func get_fallback_animation(animation_name := "") -> String:
 		return animation_name
 
 func apply_character_sfx_map() -> void:
+	if not GameWorld.owns_globals(self):
+		return # the sound map is the real game's (a Battle opponent's game is silent)
 	var path = "res://Assets/Sprites/Players/" + character + "/SFX.json"
 	var custom_character := false
 	if int(Global.player_characters[player_id]) > 3:
@@ -971,34 +977,34 @@ func add_stomp_combo(award_score := true) -> void:
 	if stomp_combo >= 10:
 		if award_score:
 			if [Global.GameMode.CHALLENGE, Global.GameMode.BOO_RACE].has(Global.current_game_mode) or Settings.file.difficulty.inf_lives:
-				Global.score += 10000
+				GameWorld.add_score(self, 10000)
 				score_note_spawner.spawn_note(10000)
 			else:
-				AudioManager.play_global_sfx("1_up")
-				Global.lives += 1
+				GameWorld.global_sfx(self, "1_up")
+				GameWorld.add_lives(self, 1)
 				score_note_spawner.spawn_one_up_note()
 	else:
 		if award_score:
-			Global.score += COMBO_VALS[stomp_combo]
+			GameWorld.add_score(self, COMBO_VALS[stomp_combo])
 			score_note_spawner.spawn_note(COMBO_VALS[stomp_combo])
 		stomp_combo += 1
 
 func land_on_ground() -> void:
 	if can_land_sfx:
 		landed.emit()
-		AudioManager.play_sfx("land", global_position)
+		GameWorld.sfx(self, "land", global_position)
 		just_landed = true
 		can_land_sfx = false
 		await get_tree().create_timer(0.1).timeout
 		just_landed = false
 
 func bump_ceiling() -> void:
-	AudioManager.play_sfx("bump", global_position)
+	GameWorld.sfx(self, "bump", global_position)
 	velocity.y = sign(gravity_vector.y) * physics_params("CEILING_BUMP_SPEED")
 	can_bump_sfx = false
 	bumping = true
 	await get_tree().create_timer(0.1).timeout
-	AudioManager.kill_sfx(physics_params("JUMP_SFX", COSMETIC_PARAMETERS))
+	GameWorld.kill_sfx(self, physics_params("JUMP_SFX", COSMETIC_PARAMETERS))
 	if is_inside_tree():
 		await get_tree().create_timer(0.1).timeout
 	bumping = false
@@ -1101,11 +1107,17 @@ func handle_projectile_firing(delta: float) -> void:
 				await get_tree().create_timer(physics_params("PROJ_COOLDOWN", POWER_PARAMETERS)).timeout
 				cooldown = false
 				if physics_params("PROJ_SFX_COOLDOWN_END", POWER_PARAMETERS):
-					AudioManager.play_sfx(physics_params("PROJ_SFX_COOLDOWN_END", POWER_PARAMETERS), global_position)
+					GameWorld.sfx(self, physics_params("PROJ_SFX_COOLDOWN_END", POWER_PARAMETERS), global_position)
 	
 func calculate_angle_param(prefix):
-	var vert_input = sign(Input.get_axis("move_up" + "_" + str(player_id),"move_down" + "_" + str(player_id)))
-	var horiz_input = sign(Input.get_axis("move_right" + "_" + str(player_id),"move_left" + "_" + str(player_id)))
+	var vert_input
+	var horiz_input
+	if BattleBotPad.claims(player_id): # a Battle opponent's pad is digital and has no InputMap actions
+		vert_input = int(Global.player_action_pressed("move_down", player_id)) - int(Global.player_action_pressed("move_up", player_id))
+		horiz_input = int(Global.player_action_pressed("move_left", player_id)) - int(Global.player_action_pressed("move_right", player_id))
+	else:
+		vert_input = sign(Input.get_axis("move_up" + "_" + str(player_id),"move_down" + "_" + str(player_id)))
+		horiz_input = sign(Input.get_axis("move_right" + "_" + str(player_id),"move_left" + "_" + str(player_id)))
 	var word_out = prefix
 	if physics_params(word_out + "_UP", POWER_PARAMETERS) && (vert_input < 0):
 		word_out = word_out + "_UP"
@@ -1150,7 +1162,7 @@ func throw_projectile() -> void:
 		projectiles_fired_since_left_ground += 1
 	projectile_amount += 1
 	node.tree_exited.connect(func(): projectile_amount -= 1)
-	AudioManager.play_sfx(physics_params("PROJ_SFX_THROW", POWER_PARAMETERS), global_position)
+	GameWorld.sfx(self, physics_params("PROJ_SFX_THROW", POWER_PARAMETERS), global_position)
 	attacking = true
 	await get_tree().create_timer(0.1, false).timeout
 	attacking = false
@@ -1180,7 +1192,7 @@ func handle_step_collision() -> void:
 	if crouching:
 		collision_size = physics_params("CROUCH_COLLISION_SIZE")
 	collision_size = Vector2(collision_size[0], collision_size[1])
-	for i in get_tree().get_nodes_in_group("StepCollision"):
+	for i in _feet: # this Mario's own feet (another game's Mario has his own)
 		var on_wall := false
 		for x in [$StepWallChecks/LWall, $StepWallChecks/RWall]:
 			x.position.x = ((collision_size.x / 2) + 1) * sign(x.position.x)
@@ -1200,7 +1212,7 @@ func handle_hammer(delta:float) -> void:
 	hammer_meter -= delta
 	if hammer_meter <= 0 and has_hammer:
 		has_hammer = false
-		AudioManager.stop_music_override(AudioManager.MUSIC_OVERRIDES.HAMMER)
+		GameWorld.stop_music_override(self, AudioManager.MUSIC_OVERRIDES.HAMMER)
 	%HammerSprite.visible = has_hammer
 	%HammerHitbox.collision_layer = has_hammer
 	if has_hammer:
@@ -1211,7 +1223,7 @@ func handle_wing_flight(delta: float) -> void:
 	flight_meter -= delta
 	if flight_meter <= 0 and has_wings:
 		has_wings = false
-		AudioManager.stop_music_override(AudioManager.MUSIC_OVERRIDES.WING)
+		GameWorld.stop_music_override(self, AudioManager.MUSIC_OVERRIDES.WING)
 		gravity = calculate_speed_param("FALL_GRAVITY", velocity_x_jump_stored)
 	%Wings.visible = flight_meter > 0
 	var wing_offset = physics_params("WING_OFFSET", COSMETIC_PARAMETERS)
@@ -1238,10 +1250,10 @@ func damage(type: String = "") -> void:
 		if Settings.file.difficulty.damage_style == 0:
 			damage_state = get_node("PowerStates/" +  POWER_STATES[0])
 		DiscoLevel.combo_meter -= 50
-		AudioManager.play_sfx("damage", global_position)
+		GameWorld.sfx(self, "damage", global_position)
 		await power_up_animation(damage_state.state_name)
 		power_state = get_node("PowerStates/" + damage_state.state_name)
-		Global.player_power_states[player_id] = str(power_state.get_index())
+		GameWorld.store_power(self, power_state.get_index())
 		do_i_frames()
 	else:
 		die()
@@ -1261,7 +1273,7 @@ func point_to_camera_limit_y(point := 0, point_dir := -1) -> float:
 func passed_checkpoint() -> void:
 	if Settings.file.gameplay.checkpoint_style == 0:
 		$Checkpoint/Animation.play("Show")
-	AudioManager.play_sfx("checkpoint", global_position)
+	GameWorld.sfx(self, "checkpoint", global_position)
 
 func do_i_frames() -> void:
 	can_hurt = false
@@ -1284,32 +1296,42 @@ func die(pit: bool = false, type: String = "") -> void:
 		return
 	if type != "": last_damage_source = type if type in valid_death_types else ""
 	is_dead = true
-	if Global.current_game_mode == Global.GameMode.BATTLE:
+	var bot := GameWorld.bot_of(self)
+	if bot != null:
+		bot.on_player_died(pit) # a Battle opponent is out the moment the game kills its Mario (doc 56)
+	elif Global.current_game_mode == Global.GameMode.BATTLE:
 		BattleHandler.on_player_died() # the KO counts now, not when the death music ends
 	visible = not pit
 	dead.emit()
-	AudioManager.play_sfx("die_sting", global_position)
-	Global.p_switch_active = false
-	Global.p_switch_timer = 0
+	GameWorld.sfx(self, "die_sting", global_position)
+	if bot == null:
+		Global.p_switch_active = false
+		Global.p_switch_timer = 0
 	stop_all_timers()
-	Global.total_deaths += 1
+	if bot == null:
+		Global.total_deaths += 1
 	sprite.process_mode = Node.PROCESS_MODE_ALWAYS
 	state_machine.transition_to("Dead", {"Pit": pit})
 	process_mode = Node.PROCESS_MODE_ALWAYS
-	get_tree().paused = true
-	Level.can_set_time = true
-	Level.first_load = true
+	GameWorld.set_paused(self, true)
+	if bot == null:
+		Level.can_set_time = true
+		Level.first_load = true
 	if Global.current_game_mode == Global.GameMode.MARATHON_PRACTICE:
 		SpeedrunHandler.timer_active = false
 	if physics_params("DEATH_HANG_TIMER", DEATH_PARAMETERS) > 0:
-		AudioManager.set_music_override(AudioManager.MUSIC_OVERRIDES.SILENCE, 999, false)
+		GameWorld.music_override(self, AudioManager.MUSIC_OVERRIDES.SILENCE, 999, false)
 		await get_tree().create_timer(physics_params("DEATH_HANG_TIMER", DEATH_PARAMETERS)).timeout
+	if not is_inside_tree():
+		return # (a Battle opponent's game can end while its Mario's death is still playing)
 	if Global.current_game_mode != Global.GameMode.BOO_RACE:
-		AudioManager.set_music_override(AudioManager.MUSIC_OVERRIDES.DEATH, 9999, false)
+		GameWorld.music_override(self, AudioManager.MUSIC_OVERRIDES.DEATH, 9999, false)
 		await get_tree().create_timer(3).timeout
 	else:
 		AudioManager.set_music_override(AudioManager.MUSIC_OVERRIDES.RACE_LOSE, 9999, false)
 		await get_tree().create_timer(5).timeout
+	if not is_inside_tree():
+		return
 
 	death_load()
 
@@ -1317,7 +1339,11 @@ func fire_die() -> void: die(false, "Fire")
 
 func death_load() -> void:
 	power_state = get_node("PowerStates/" + physics_params("STARTING_POWER_STATE", POWER_PARAMETERS))
-	Global.player_power_states[player_id] = "0"
+	GameWorld.store_power(self, 0)
+	var bot := GameWorld.bot_of(self)
+	if bot != null:
+		bot.on_death_finished() # no reload, no lives: the opponent is out
+		return
 
 	if Global.death_load:
 		return
@@ -1379,7 +1405,7 @@ func time_up() -> void:
 func set_power_state_frame() -> void:
 	colour_palette = ResourceSetter.get_resource(preload("uid://b0quveyqh25dn"))
 	
-	var cur_palette = CHARACTER_PALETTES[int(Global.player_characters[player_id])]
+	var cur_palette = CHARACTER_PALETTES[GameWorld.character_index(self)]
 	if (cur_palette != null):
 		$PlayerPalette/ResourceSetterNew.json_path = cur_palette
 	if power_state != null:
@@ -1402,10 +1428,10 @@ func get_power_up(power_name := "", give_points := true) -> void:
 	if is_dead:
 		return
 	if give_points:
-		Global.score += 1000
+		GameWorld.add_score(self, 1000)
 		DiscoLevel.combo_amount += 1
 		score_note_spawner.spawn_note(1000)
-	AudioManager.play_sfx("power_up", global_position)
+	GameWorld.sfx(self, "power_up", global_position)
 	powered_up.emit()
 	if Settings.file.difficulty.damage_style == 0 and power_state.state_name != power_name:
 		if power_name != "Big" and power_state.state_name != "Big":
@@ -1417,7 +1443,7 @@ func get_power_up(power_name := "", give_points := true) -> void:
 	else:
 		return
 	power_state = new_power_state
-	Global.player_power_states[player_id] = str(power_state.get_index())
+	GameWorld.store_power(self, power_state.get_index())
 	handle_power_up_states(0)
 	can_hurt = true
 	refresh_hitbox()
@@ -1442,7 +1468,7 @@ func power_up_animation(new_power_state := "") -> void:
 
 	sprite.process_mode = Node.PROCESS_MODE_ALWAYS
 	sprite.show()
-	get_tree().paused = true
+	GameWorld.set_paused(self, true)
 	
 	var hitbox_changed = new_state.power_tier != old_state.power_tier
 	var shrinking = hitbox_changed and (new_state.power_tier < old_state.power_tier)
@@ -1505,7 +1531,7 @@ func power_up_animation(new_power_state := "") -> void:
 			if rainbow:
 				sprite.material.set_shader_parameter("enabled", false)
 	sprite.play("Idle")
-	get_tree().paused = false
+	GameWorld.set_paused(self, false)
 	sprite.process_mode = Node.PROCESS_MODE_INHERIT
 
 	if Global.player_action_pressed("jump", player_id) and can_powerup_jump:
@@ -1518,9 +1544,9 @@ func dispense_stored_item() -> void:
 	add_sibling(RESERVE_ITEM.instantiate())
 
 func get_character_sprite_path(power_stateto_use := power_state.state_name) -> String:
-	character = Player.CHARACTERS[Global.player_characters[player_id]]
+	character = Player.CHARACTERS[GameWorld.character_index(self)]
 	var path = "res://Assets/Sprites/Players/" + character + "/" + power_stateto_use + ".json"
-	if int(Global.player_characters[player_id]) > 3:
+	if GameWorld.character_index(self) > 3:
 		path = path.replace("res://Assets/Sprites/Players", Global.config_path.path_join("custom_characters/"))
 		if FileAccess.file_exists(path) == false:
 			path = "res://Assets/Sprites/Players/Mario/" + power_stateto_use + ".json"
@@ -1530,14 +1556,15 @@ func get_character_sprite_path(power_stateto_use := power_state.state_name) -> S
 func enter_pipe(pipe: PipeArea, warp_to_level := true, wait_forever := false) -> void:
 	z_index = -10
 	can_bump_sfx = false
-	Global.can_pause = false
-	Global.can_time_tick = false
+	if GameWorld.owns_globals(self):
+		Global.can_pause = false
+		Global.can_time_tick = false
 	pipe_enter_direction = pipe.get_vector(pipe.enter_direction)
 	if pipe_enter_direction.x != 0:
 		global_position.y = pipe.global_position.y + 14
-	AudioManager.play_sfx("pipe", global_position)
+	GameWorld.sfx(self, "pipe", global_position)
 	state_machine.transition_to("Pipe")
-	PipeArea.exiting_pipe_id = pipe.pipe_id
+	GameWorld.set_exiting_pipe_id(self, pipe.pipe_id)
 	hide_pipe_animation()
 	if !wait_forever:
 		if warp_to_level:
@@ -1548,7 +1575,7 @@ func enter_pipe(pipe: PipeArea, warp_to_level := true, wait_forever := false) ->
 			elif Global.current_level is CustomLevel:
 				Global.transition_to_scene(LevelEditor.sub_areas[pipe.target_sub_level])
 			else:
-				Global.transition_to_scene(pipe.target_level)
+				GameWorld.transition_to_scene(self, pipe.target_level)
 
 func hide_pipe_animation() -> void:
 	if pipe_enter_direction.x != 0:
@@ -1561,7 +1588,8 @@ func hide_pipe_animation() -> void:
 var exiting_pipe := false
 
 func go_to_exit_pipe(pipe: PipeArea) -> void:
-	Global.can_time_tick = false
+	if GameWorld.owns_globals(self):
+		Global.can_time_tick = false
 	exiting_pipe = true
 	pipe_enter_direction = Vector2.ZERO
 	state_machine.transition_to("Freeze")
@@ -1584,15 +1612,17 @@ func do_earthquake() -> void:
 func exit_pipe(pipe: PipeArea) -> void:
 	show()
 	pipe_enter_direction = -pipe.get_vector(pipe.enter_direction)
-	AudioManager.play_sfx("pipe", global_position)
+	GameWorld.sfx(self, "pipe", global_position)
 	state_machine.transition_to("Pipe")
 	can_hurt = false
 	await get_tree().create_timer(0.65, false).timeout
-	Global.can_pause = true
+	if GameWorld.owns_globals(self):
+		Global.can_pause = true
 	can_hurt = true
 	exiting_pipe = false
 	state_machine.transition_to("Normal")
-	Global.can_time_tick = true
+	if GameWorld.owns_globals(self):
+		Global.can_time_tick = true
 
 
 func jump() -> void:
@@ -1601,7 +1631,7 @@ func jump() -> void:
 	velocity.y = calculate_jump_height(calculate_speed_param("JUMP_SPEED")) * gravity_vector.y
 	velocity_x_jump_stored = velocity.x
 	gravity = calculate_speed_param("JUMP_GRAVITY")
-	AudioManager.play_sfx(physics_params("JUMP_SFX", COSMETIC_PARAMETERS), global_position)
+	GameWorld.sfx(self, physics_params("JUMP_SFX", COSMETIC_PARAMETERS), global_position)
 	has_jumped = true
 	jump_cancelled = false
 	jumped.emit()
@@ -1653,14 +1683,14 @@ func do_smoke_effect() -> void:
 		add_sibling(node)
 		if power_state.hitbox_size == "Small":
 			break
-	AudioManager.play_sfx("magic", global_position)
+	GameWorld.sfx(self, "magic", global_position)
 
 func on_area_entered(area: Area2D) -> void:
 	if area.owner is Player and area.owner != self:
 		if area.owner.velocity.y > 0 and area.owner.is_actually_on_floor() == false:
 			area.owner.enemy_bounce_off(false)
 			velocity.y = sign(gravity_vector.y) * 50
-			AudioManager.play_sfx("bump", global_position)
+			GameWorld.sfx(self, "bump", global_position)
 	elif area.owner is WaterArea:
 		water_entered()
 
@@ -1674,7 +1704,7 @@ func super_star() -> void:
 	star_meter = clamp(physics_params("STAR_TIME", POWER_PARAMETERS) - 2, 0, INF)
 	$CanvasLayer/Control2/MarginContainer/Timers/StarTimer/TimerSprite.max_value = star_meter
 	DiscoLevel.combo_meter += 1
-	AudioManager.set_music_override(AudioManager.MUSIC_OVERRIDES.STAR, 1, false)
+	GameWorld.music_override(self, AudioManager.MUSIC_OVERRIDES.STAR, 1, false)
 
 func hammer_get() -> void:
 	if physics_params("HAMMER_TIME", POWER_PARAMETERS) <= 0:
@@ -1682,7 +1712,7 @@ func hammer_get() -> void:
 	has_hammer = true
 	hammer_meter = physics_params("HAMMER_TIME", POWER_PARAMETERS)
 	DiscoLevel.combo_meter += 1
-	AudioManager.set_music_override(AudioManager.MUSIC_OVERRIDES.HAMMER, 0, false)
+	GameWorld.music_override(self, AudioManager.MUSIC_OVERRIDES.HAMMER, 0, false)
 
 func wing_get() -> void:
 	if physics_params("WING_TIME", POWER_PARAMETERS) <= 0:
@@ -1690,13 +1720,13 @@ func wing_get() -> void:
 	has_wings = true
 	flight_meter = physics_params("WING_TIME", POWER_PARAMETERS)
 	DiscoLevel.combo_meter += 1
-	AudioManager.set_music_override(AudioManager.MUSIC_OVERRIDES.WING, 0, false, false)
+	GameWorld.music_override(self, AudioManager.MUSIC_OVERRIDES.WING, 0, false, false)
 
 func on_star_timeout() -> void:
 	var time = clamp(physics_params("STAR_TIME", POWER_PARAMETERS), 0, 2) * 0.5
 	sprite.material.set_shader_parameter("speed", physics_params("RAINBOW_STAR_SLOW_FX_SPEED", COSMETIC_PARAMETERS))
 	await get_tree().create_timer(time, false).timeout
-	AudioManager.stop_music_override(AudioManager.MUSIC_OVERRIDES.STAR)
+	GameWorld.stop_music_override(self, AudioManager.MUSIC_OVERRIDES.STAR)
 	await get_tree().create_timer(time, false).timeout
 	sprite.material.set_shader_parameter("speed", physics_params("RAINBOW_FX_SPEED", COSMETIC_PARAMETERS))
 	if star_meter <= 0:
@@ -1736,7 +1766,7 @@ func water_entered() -> void:
 	velocity.y = max(-physics_params("SWIM_HEIGHT"), velocity.y)
 
 func apply_active_flingers() -> void:
-	for i: FlingerGizmo in get_tree().get_nodes_in_group("PlayerFlingers"):
+	for i: FlingerGizmo in GameWorld.group(self, "PlayerFlingers"):
 		if i.active:
 			i.launch()
 

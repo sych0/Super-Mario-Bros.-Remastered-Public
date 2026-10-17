@@ -27,7 +27,7 @@ script/source = "extends Node
 @export var collision_to_disable: CollisionShape2D = null
 func _physics_process(_delta: float) -> void:
 	if collision_to_disable != null:
-		var player: Player = get_tree().get_first_node_in_group(\"Players\")
+		var player: Player = GameWorld.first_player(self)
 		collision_to_disable.set_deferred(\"disabled\", player.crouching and player.power_state.state_name != \"Small\")
 "
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_0c32g"]

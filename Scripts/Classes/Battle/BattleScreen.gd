@@ -67,6 +67,7 @@ var atlas: BattlePreviewAtlas = null ## the one shared render target holding all
 var cells: Array[BattlePreviewCell] = [] ## 187x240 pictures, in the atlas (index = contestant id - 1)
 var panes: Array[BattleOpponentPane] = [] ## 32x41 windows on the canvas, each showing its own atlas region
 var driver: BattlePreviewDriver = null ## drives the live previews (all 34, each on its own course)
+var bots: BattleBotDirector = null ## the opponents that play a real game (doc 56); the driver previews the others
 var attack_view: BattleAttackPresentation = null ## the visible side of this session's attack loop (a reader of its events; null when attacks are off)
 var attack_layer: BattleAttackLayer = null ## the thin red lines of attacks on the real player, over the canvas
 var incoming_strip: BattleIncomingStrip = null ## the real player's incoming enemies, in strip A
@@ -489,7 +490,21 @@ func _ensure_driver() -> void:
 	driver = null
 	for cell in cells:
 		cell.set_live(null, null) # nothing of a previous session's pictures may linger
+		cell.set_bot(null)
+	_free_bots()
 	var ids: Array = range(1, BattleHudLayout.OPPONENTS + 1)
+	var real: Array = []
+	for id in ids:
+		if session.contestants[id].world_driven:
+			real.append(id)
+	if not real.is_empty():
+		bots = BattleBotDirector.new(session)
+		bots.follow = game_viewport
+		add_child(bots)
+		bots.start(real)
+		for id in real:
+			cells[id - 1].set_bot(bots.world(id))
+			ids.erase(id)
 	driver = BattlePreviewDriver.create(session, ids, float(BattlePreviewAtlas.CELL_PX.x))
 	if driver == null:
 		return
@@ -510,6 +525,12 @@ func _ensure_driver() -> void:
 		debug_view.size = Vector2(region.size)
 		debug_view.position = game.position + Vector2(floorf((game.size.x - debug_view.size.x) / 2.0), 0)
 		_overlay_layer.add_child(debug_view)
+
+func _free_bots() -> void:
+	if bots != null and is_instance_valid(bots):
+		remove_child(bots)
+		bots.queue_free()
+	bots = null
 
 ## Makes (once per session) the presentation that turns the session's attack events into lines, markers
 ## and the incoming strip. It only reads the session. With the attack loop off there is nothing to show
@@ -697,6 +718,8 @@ func _freeze_field() -> void:
 	field_frozen = true
 	if driver != null:
 		driver.settle() # a preview caught in the dark between two courses is on the next one, never black (doc 55)
+	if bots != null:
+		bots.stop() # the opponents' real games stop where they are
 	for cell in cells:
 		cell.freeze()
 		cell.queue_redraw()
@@ -733,7 +756,9 @@ func _start_next_round() -> void:
 	field_frozen = false
 	for cell in cells:
 		cell.set_live(null, null) # the new session gets its own tracks
+		cell.set_bot(null)
 	driver = null
+	_free_bots()
 	_clear_attack_view() # no line, marker or strip icon of the finished round survives
 	BattleHandler.start_match()
 

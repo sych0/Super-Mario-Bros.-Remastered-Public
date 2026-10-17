@@ -12,14 +12,14 @@ func spawn_note(amount = 100, amount_2 := 0) -> void:
 	var note = SCORE_NOTE.instantiate()
 	note.global_position = owner.global_position + note_offset
 	if add_score:
-		Global.score += amount
+		GameWorld.add_score(owner, amount)
 	note.get_node("Container/Label").text = str(amount)
 	if play_sfx:
 		play_death_sfx()
-	Global.current_level.add_child(note)
+	GameWorld.level(owner).add_child(note)
 
 func play_death_sfx() -> void:
-	AudioManager.play_sfx("kick", owner.global_position)
+	GameWorld.sfx(owner, "kick", owner.global_position)
 
 func spawn_one_up_note() -> void:
 	var note = ONE_UP_NOTE.instantiate()

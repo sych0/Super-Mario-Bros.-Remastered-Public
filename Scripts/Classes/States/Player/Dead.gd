@@ -26,8 +26,8 @@ func physics_update(delta: float) -> void:
 		player.velocity.y += (death_params("DEATH_FALL_GRAVITY") / delta) * delta * player.gravity_vector.y
 		player.velocity.y = clamp(player.velocity.y, -death_params("DEATH_MAX_FALL_SPEED"), death_params("DEATH_MAX_FALL_SPEED")) # wish this could be better than just substituting -INF but you can't win em all ~ nabbup
 		player.move()
-		if Global.multibind_action_just_pressed("ui_accept") or Global.multibind_action_just_pressed("jump_0"):
-			player.death_load()
+		if (Global.multibind_action_just_pressed("ui_accept") or Global.multibind_action_just_pressed("jump_0")) and GameWorld.owns_globals(player):
+			player.death_load() # (the real player's buttons skip only the real player's death)
 		if player.is_actually_on_floor():
 			deceleration(delta)
 

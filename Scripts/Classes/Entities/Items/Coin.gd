@@ -20,10 +20,10 @@ func collect() -> void:
 	remove_from_group("Coins")
 	collected.emit()
 	$Hitbox.area_entered.disconnect(area_entered)
-	Global.coins += 1
+	GameWorld.add_coins(self, 1)
 	DiscoLevel.combo_meter += 10
-	Global.score += 200
-	AudioManager.play_sfx("coin", global_position)
+	GameWorld.add_score(self, 200)
+	GameWorld.sfx(self, "coin", global_position)
 	if can_spawn_particles and Settings.file.visuals.extra_particles == 1:
 		summon_particle()
 		$Sprite.queue_free()

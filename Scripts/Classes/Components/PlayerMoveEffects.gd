@@ -1,6 +1,8 @@
 extends Node
 
 func _process(_delta):
+	if not GameWorld.owns_globals(self):
+		return # footstep sounds and dust are the real player's game's (a Battle opponent's game is silent, doc 56)
 	handle_move_fx(get_parent(), get_tree().paused or Global.game_paused)
 
 func handle_move_fx(player: Player, force_kill: bool) -> void:

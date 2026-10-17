@@ -38,8 +38,9 @@ var sp_scrolling := false
 
 
 func _exit_tree() -> void:
-	cam_locked = false
-	solid_cam_bounds = false
+	if GameWorld.owns_globals(self):
+		cam_locked = false
+		solid_cam_bounds = false
 
 func _ready() -> void:
 	player = owner
@@ -52,9 +53,9 @@ func _physics_process(delta: float) -> void:
 		set_deferred("last_position", player.global_position)
 
 func handle_camera(delta: float) -> void:
-	if get_tree().get_first_node_in_group("Players") == null:
+	if GameWorld.first_player(self) == null:
 		return
-	for i in get_tree().get_nodes_in_group("Players"):
+	for i in GameWorld.players(self): # the players of this game (a Battle opponent's camera follows only its own Mario)
 		if is_instance_valid(player) == false:
 			player = i
 		if i != player:
@@ -73,7 +74,7 @@ func handle_camera(delta: float) -> void:
 		if not player.exiting_pipe:
 			return
 	
-	if not cam_locked:
+	if not GameWorld.cam_locked(self):
 		if not sp_screen_scroll:
 			handle_horizontal_scrolling(delta)
 			handle_vertical_scrolling(delta)
@@ -115,7 +116,7 @@ func handle_horizontal_scrolling(delta: float) -> void:
 			camera_position.x += min(abs(player.velocity.x), 40) * delta
 	
 	## LEFT MOVEMENT
-	elif true_vel_dir == -1 and can_scroll_left and Global.current_level.can_backscroll:
+	elif true_vel_dir == -1 and can_scroll_left and GameWorld.level(self).can_backscroll:
 		cam_direction = -1
 		if player.global_position.x <= camera_position.x:
 			scrolling = true
@@ -150,7 +151,7 @@ func do_sp_scroll(direction := 1) -> void:
 	if sp_scrolling: return
 	sp_scrolling = true
 	process_mode = Node.PROCESS_MODE_ALWAYS
-	get_tree().paused = true
+	GameWorld.set_paused(self, true)
 	var distance = get_viewport().get_visible_rect().size.x - 32
 	if Settings.file.visuals.smbs_scroll == 1: #Sharp X1 (smooth)
 		var tween = create_tween()
@@ -165,7 +166,7 @@ func do_sp_scroll(direction := 1) -> void:
 		await get_tree().create_timer(0.5).timeout
 		Global.get_node("Transition").hide()
 	sp_scrolling = false
-	get_tree().paused = false
+	GameWorld.set_paused(self, false)
 
 func tween_ahead() -> void:
 	if scrolling == false: return
@@ -190,7 +191,7 @@ func handle_offsets(delta: float) -> void:
 	if player.velocity.x == 0 or (player.is_on_wall() and player.direction == -player.get_wall_normal().x):
 		true_vel_dir = 0
 		true_velocity.x = 0
-	if Global.current_level.can_backscroll:
+	if GameWorld.level(self).can_backscroll:
 		const CENTER_OFFSET := 8
 		if true_vel_dir != 0 and abs(true_velocity.x) > 80:
 			var left_bound := camera_position.x - CENTER_OFFSET >= point_to_camera_limit(-256, -1)
@@ -203,11 +204,12 @@ func handle_offsets(delta: float) -> void:
 func do_limits() -> void:
 	if get_viewport() == null: return
 	var viewport_size = get_viewport().get_visible_rect().size
-	if Global.current_level.enforce_resolution != Vector2.ZERO:
-		viewport_size = Global.current_level.enforce_resolution
-	camera_right_limit = clamp(Player.camera_right_limit, -256 + (viewport_size.x), INF)
+	var level := GameWorld.level(self)
+	if level.enforce_resolution != Vector2.ZERO:
+		viewport_size = level.enforce_resolution
+	camera_right_limit = clamp(GameWorld.camera_right_limit(self), -256 + (viewport_size.x), INF)
 	camera_position.x = clamp(camera_position.x, point_to_camera_limit(-256 - camera_offset.x, -1), point_to_camera_limit(camera_right_limit - camera_offset.x, 1))
-	camera_position.y = clamp(camera_position.y, point_to_camera_limit_y(Global.current_level.vertical_height, -1), point_to_camera_limit_y(32, 1))
+	camera_position.y = clamp(camera_position.y, point_to_camera_limit_y(level.vertical_height, -1), point_to_camera_limit_y(32, 1))
 	var wall_enabled := true
 	if is_instance_valid(Global.level_editor):
 		if Global.level_editor.playing_level == false:

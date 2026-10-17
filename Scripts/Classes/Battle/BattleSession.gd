@@ -114,7 +114,7 @@ func step() -> void:
 		if not c.alive:
 			continue
 		var cause := KoCause.NONE
-		if c.is_bot:
+		if c.is_bot and not c.world_driven:
 			var power_before := c.power
 			var cleared_before := c.levels_cleared
 			var distance_before := c.levels_cleared + c.progress
@@ -137,6 +137,42 @@ func step() -> void:
 	attacks.generate_bot_defeats(self, gains) # bots that are still in may defeat (and send) an enemy
 	_apply_kos(knocked_out)
 	attacks.update_targets(self) # the measure-following targets (the player's Lowest Time / Attackers) catch up with this tick
+
+# ---- opponents that play a real game (BattleBotWorld, doc 56) ----
+
+## Makes contestant `id` a real-game opponent (or a simulated one again). Set before the round starts: from then on the
+## session rolls nothing for it (its clock still runs here), and its game reports the rest through the functions below.
+func set_world_driven(id: int, on := true) -> void:
+	if id != PLAYER_ID:
+		contestants[id].world_driven = on
+
+## Whether `id` plays a real game: the real player, or a world-driven opponent. Enemies sent to a real game become real
+## enemies in it, and stay ACTIVE until that game reports what happened to them.
+func is_real(id: int) -> bool:
+	return id == PLAYER_ID or contestants[id].world_driven
+
+## Live in-level progress (0..1) of world-driven opponent `id`. Only moves forward within a level.
+func report_bot_progress(id: int, value: float) -> void:
+	var c := contestants[id]
+	if c.world_driven and c.alive and not finished:
+		c.progress = maxf(c.progress, clampf(value, 0.0, 1.0))
+
+## World-driven opponent `id` cleared its course.
+func report_bot_level_complete(id: int) -> void:
+	var c := contestants[id]
+	if c.world_driven and c.alive and not finished:
+		c.levels_cleared += 1
+		c.progress = 0.0
+		_log(EventType.LEVEL_CLEAR, id, c.levels_cleared)
+
+## World-driven opponent `id`'s Mario is now in power state `power` (0 small, 1 big, 2 fire): a HIT or a POWER_UP.
+func report_bot_power(id: int, power: int) -> void:
+	var c := contestants[id]
+	if not c.world_driven or not c.alive or finished or power == c.power:
+		return
+	var before := c.power
+	c.power = power
+	_log(EventType.HIT if power < before else EventType.POWER_UP, id, power)
 
 # ---- inputs from the real player (via BattleHandler) ----
 
@@ -175,19 +211,22 @@ func report_enemy_defeat(id: int, kind: int) -> BattleAttack:
 ##   incoming: `report_incoming_kill` - it resolves its own attack and NEVER sends (rule R0).
 ## The session decides everything else (whether anything is sent, and to whom). No-op without a
 ## current session.
-static func report_enemy_kill(script_path: String, source: int, origin := PackedInt64Array()) -> BattleAttack:
-	if current == null:
+## `by` is the contestant whose game the kill happened in: the real player, or a world-driven opponent (doc 56), whose own
+## Mario is "the player" of its game (`source` PLAYER means him).
+static func report_enemy_kill(script_path: String, source: int, origin := PackedInt64Array(), by := PLAYER_ID) -> BattleAttack:
+	if current == null or not current.is_real(by):
 		return null
 	if not origin.is_empty():
-		current.report_incoming_kill(origin, source)
+		current.report_incoming_kill(origin, source, by)
 		return null
-	current.attacks.note_kill(source)
+	if by == PLAYER_ID:
+		current.attacks.note_kill(source)
 	if source != BattleAttribution.Source.PLAYER:
 		return null
 	var kind := BattleEnemyType.kind_for_script(script_path)
 	if kind == BattleEnemyType.Kind.NONE:
 		return null
-	return current.report_enemy_defeat(PLAYER_ID, kind)
+	return current.report_enemy_defeat(by, kind)
 
 ## The real game killed an enemy that this session sent to the real player; `origin` is its identity
 ## (BattleAttribution.origin_of: [session uid, seq, sender, kind]). If it is this session's attack, aimed
@@ -197,15 +236,16 @@ static func report_enemy_kill(script_path: String, source: int, origin := Packed
 ## shell) or stale (another round's): counted, nothing more. Never an ENEMY_DEFEATED, never a send,
 ## never a player-stream draw: an incoming enemy's death is not a defeat that sends (rule R0, doc 46).
 ## Returns whether an attack was resolved.
-func report_incoming_kill(origin: PackedInt64Array, source: int) -> bool:
-	attacks.note_incoming_kill(source)
+func report_incoming_kill(origin: PackedInt64Array, source: int, by := PLAYER_ID) -> bool:
+	if by == PLAYER_ID:
+		attacks.note_incoming_kill(source)
 	if origin.size() != BattleAttribution.ORIGIN_SIZE or origin[0] != uid:
 		return false
 	var seq := int(origin[1])
 	if seq < 0 or seq >= attacks.history.size():
 		return false
 	var attack: BattleAttack = attacks.history[seq]
-	if attack.target != PLAYER_ID or attack.sender != int(origin[2]) or attack.kind != int(origin[3]) or attack.spawned_tick < 0:
+	if attack.target != by or attack.sender != int(origin[2]) or attack.kind != int(origin[3]) or attack.spawned_tick < 0:
 		return false
 	var cause := BattleAttack.Resolution.DEFEATED_BY_PLAYER if source == BattleAttribution.Source.PLAYER else BattleAttack.Resolution.OTHER
 	return attacks.resolve_incoming(self, seq, cause, {"source": source})
@@ -259,7 +299,11 @@ func get_incoming(id: int) -> Array[Dictionary]:
 ## round has ended. There is no timer on these: this is the only way an active attack on the real
 ## player ends, besides the player's elimination, a level transition and the end of the round.
 func resolve_player_incoming(seq: int, cause: int) -> bool:
-	if seq < 0 or seq >= attacks.history.size() or attacks.history[seq].target != PLAYER_ID:
+	return resolve_incoming_on(PLAYER_ID, seq, cause)
+
+## The same, for the attack numbered `seq` on real-game contestant `target` (the player or a world-driven opponent).
+func resolve_incoming_on(target: int, seq: int, cause: int) -> bool:
+	if seq < 0 or seq >= attacks.history.size() or attacks.history[seq].target != target or not is_real(target):
 		return false
 	return attacks.resolve_incoming(self, seq, cause)
 
@@ -275,13 +319,23 @@ func resolve_player_active(cause: int) -> int:
 func report_player_incoming_spawned(seq: int) -> bool:
 	return attacks.mark_spawned(self, seq)
 
+## The same, for real-game contestant `target`.
+func report_incoming_spawned(target: int, seq: int) -> bool:
+	return attacks.mark_spawned(self, seq, target)
+
 ## The level the real player was in is gone (BattleHandler leaving the tree): every ACTIVE attack on
 ## them whose enemy was SPAWNED in it ends with `cause` (BattleAttack.Resolution.LEVEL_TRANSITION).
 ## ACTIVE attacks whose enemy never appeared were never in that level: they stay ACTIVE, keep their
 ## place in the order, and are delivered in the next level or room. QUEUED ones keep waiting too.
 ## Returns how many were resolved.
 func resolve_player_spawned(cause: int) -> int:
-	return attacks.resolve_all(self, PLAYER_ID, cause, true, true)
+	return resolve_spawned_on(PLAYER_ID, cause)
+
+## The same, for real-game contestant `target` (a world-driven opponent leaving a level).
+func resolve_spawned_on(target: int, cause: int) -> int:
+	if not is_real(target):
+		return 0
+	return attacks.resolve_all(self, target, cause, true, true)
 
 ## Closes the round's enemy loop: everything still unresolved, on anyone, ends with ROUND_ENDED, and
 ## nothing more is sent or resolved. Runs by itself when the match finishes. Returns how many it resolved.

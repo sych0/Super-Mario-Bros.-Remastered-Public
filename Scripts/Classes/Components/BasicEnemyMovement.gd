@@ -66,7 +66,7 @@ func apply_gravity(delta: float) -> void:
 	owner.velocity.y = clamp(owner.velocity.y, -INF, Global.entity_max_fall_speed)
 
 func player_direction_check() -> void:
-	var target_player = get_tree().get_first_node_in_group("Players")
+	var target_player = GameWorld.first_player(self)
 	owner.direction = sign(target_player.global_position.x - owner.global_position.x)
 
 func wall_hit() -> void:

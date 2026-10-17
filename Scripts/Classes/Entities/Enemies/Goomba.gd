@@ -20,7 +20,7 @@ func _physics_process(_delta: float) -> void:
 
 func stomped_on(player: Player) -> void:
 	killed.emit("Hello")
-	AudioManager.play_sfx("enemy_stomp", global_position)
+	GameWorld.sfx(self, "enemy_stomp", global_position)
 	DiscoLevel.combo_amount += 1
 	player.enemy_bounce_off()
 	hit_count -= 1
@@ -35,7 +35,7 @@ func damage(object: Node2D) -> void:
 		die_from_object(object)
 		$ScoreNoteSpawner.spawn_note(200)
 		return
-	AudioManager.play_sfx("kick", global_position)
+	GameWorld.sfx(self, "kick", global_position)
 	velocity.y = -150
 	hit(object)
 

@@ -42,7 +42,7 @@ func _ready() -> void:
 			hide()
 
 func run_pipe_check() -> void:
-	if exiting_pipe_id == pipe_id and exit_only:
+	if GameWorld.exiting_pipe_id(self) == pipe_id and exit_only:
 		exit_pipe()
 
 func _physics_process(_delta: float) -> void:
@@ -59,7 +59,7 @@ func _physics_process(_delta: float) -> void:
 		update_visuals()
 
 func _exit_tree() -> void:
-	can_enter = true
+	GameWorld.set_pipes_open(self, true)
 
 func update_visuals() -> void:
 	if Engine.is_editor_hint() or (Global.current_game_mode == Global.GameMode.LEVEL_EDITOR):
@@ -73,20 +73,20 @@ func update_visuals() -> void:
 		$ArrowJoint.hide()
 
 func exit_pipe() -> void:
-	can_enter = false
+	GameWorld.set_pipes_open(self, false)
 	pipe_exited.emit()
-	for i in get_tree().get_nodes_in_group("Players"):
+	for i in GameWorld.players(self):
 		if i.is_node_ready() == false:
 			await i.ready
 		i.go_to_exit_pipe(self)
 	await get_tree().create_timer(0.5, false).timeout
-	for i in get_tree().get_nodes_in_group("Players"):
+	for i in GameWorld.players(self):
 		if is_instance_valid(i) == false: continue
 		await i.exit_pipe(self)
-		if get_tree().get_nodes_in_group("Players").size() > 1:
+		if GameWorld.players(self).size() > 1:
 			await get_tree().create_timer(0.5, false).timeout
-	exiting_pipe_id = -1
-	can_enter = true
+	GameWorld.set_exiting_pipe_id(self, -1)
+	GameWorld.set_pipes_open(self, true)
 
 func get_vector(direction := 0) -> Vector2:
 	match direction:
@@ -118,7 +118,7 @@ func in_game() -> void:
 	if exit_only:
 		return
 	for i in hitbox.get_overlapping_areas():
-		if i.owner is Player and can_enter:
+		if i.owner is Player and GameWorld.pipes_open(self):
 			run_player_check(i.owner)
 
 func run_player_check(player: Player) -> void:
@@ -129,9 +129,9 @@ func run_player_check(player: Player) -> void:
 	if enter_direction <= 2:
 		max_distance = 999
 	if distance <= max_distance and Global.player_action_pressed(get_input_direction(enter_direction), player.player_id) and (player.is_actually_on_floor() or enter_direction == 1):
-		can_enter = false
+		GameWorld.set_pipes_open(self, false)
 		pipe_entered.emit()
-		can_enter = false
+		GameWorld.set_pipes_open(self, false)
 		DiscoLevel.can_meter_tick = false
 		Level.in_vine_level = false
 		player.enter_pipe(self)

@@ -32,8 +32,8 @@ signal block_destroyed
 func _enter_tree() -> void:
 	z_index = start_z
 	sync_to_physics = false
-	if item != null:
-		if item.resource_path.contains(Global.current_level.scene_file_path):
+	if item != null and GameWorld.level(self) != null:
+		if item.resource_path.contains(GameWorld.level(self).scene_file_path):
 			Global.log_error("ITEM SCENE IS NULL! BLOCK NAME: " + str(name) + " PLEASE REPORT!")
 
 func dispense_item() -> void:
@@ -43,20 +43,20 @@ func dispense_item() -> void:
 	can_hit = false
 	await get_tree().create_timer(0.1, false).timeout
 	DiscoLevel.combo_meter += combo_meter_amount
-	var item_to_dispense = player_mushroom_check(get_tree().get_first_node_in_group("Players"))
+	var item_to_dispense = player_mushroom_check(GameWorld.first_player(self))
 	var node = item_to_dispense.instantiate()
 	node.set_meta("block_item", true)
 	node.set_meta("no_persist", true)
 	node.set_meta("layer", get_meta("layer", -1))
 	if node is PowerUpItem or node.has_meta("is_item"):
-		for i in get_tree().get_nodes_in_group("Players"):
+		for i in GameWorld.players(self):
 			add_sibling(node)
 			node.global_position = global_position - Vector2(0, 1)
 			node.hide()
 			node.reset_physics_interpolation()
 			if node is PowerUpItem:
 				if Global.connected_players > 1:
-					AudioManager.play_sfx("item_appear", global_position)
+					GameWorld.sfx(self, "item_appear", global_position)
 					node.player_multiplayer_launch_spawn(i)
 				else:
 					node.block_dispense_tween()
@@ -72,7 +72,7 @@ func dispense_item() -> void:
 		node.reset_physics_interpolation()
 		parent.move_child(node, get_index() - 1)
 		if NO_SFX_ITEMS.has(item.resource_path) == false:
-			AudioManager.play_sfx("item_appear", global_position)
+			GameWorld.sfx(self, "item_appear", global_position)
 			node.set("velocity", Vector2(0, node.get_meta("block_launch_velocity", -150)))
 	can_hit = true
 	item_amount -= 1
@@ -108,7 +108,7 @@ func emit_hit_signal() -> void:
 func destroy() -> void:
 	block_destroyed.emit()
 	DiscoLevel.combo_meter += combo_meter_amount
-	AudioManager.play_sfx("block_break", global_position)
+	GameWorld.sfx(self, "block_break", global_position)
 	var particles = destruction_particle_scene.instantiate()
 	particles.global_position = global_position
 	if get_parent() is TileMapLayer:

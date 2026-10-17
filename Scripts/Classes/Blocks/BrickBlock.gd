@@ -12,7 +12,7 @@ func on_block_hit(player: Player) -> void:
 			self.add_collision_exception_with(player) # Don't bonk with physics, will be handled after block is broken
 			await get_tree().physics_frame
 			destroy()
-			Global.score += 50
+			GameWorld.add_score(self, 50)
 	if item != null:
 		if mushroom_if_small:
 			item = player_mushroom_check(player)
@@ -22,7 +22,7 @@ func on_shell_block_hit(_shell: Shell) -> void:
 	if item == null:
 		await get_tree().physics_frame
 		destroy()
-		Global.score += 50
+		GameWorld.add_score(self, 50)
 	else:
 		dispense_item()
 

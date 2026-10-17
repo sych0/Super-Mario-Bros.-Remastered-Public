@@ -25,7 +25,9 @@ func report_battle_defeat(cause = null) -> void: # untyped: a freed Player must 
 	if _battle_defeat_reported or Global.current_game_mode != Global.GameMode.BATTLE:
 		return
 	_battle_defeat_reported = true
-	BattleSession.report_enemy_kill((get_script() as Script).resource_path, BattleAttribution.of(cause), BattleAttribution.origin_of(self))
+	var bot := GameWorld.bot_of(self) # a kill in a Battle opponent's own game (doc 56) is that opponent's
+	var by := bot.contestant_id if bot != null else BattleSession.PLAYER_ID
+	BattleSession.report_enemy_kill((get_script() as Script).resource_path, BattleAttribution.of(cause), BattleAttribution.origin_of(self), by)
 
 func _enter_tree() -> void:
 	add_to_group("Enemies")
@@ -62,11 +64,11 @@ func die_from_object(obj: Node2D) -> void:
 
 func flag_die() -> void:
 	if on_screen_enabler != null and ignore_flag_die == false:
-		if on_screen_enabler.is_on_screen():
+		if GameWorld.on_screen(on_screen_enabler):
 			queue_free()
 			if (score_note_adder != null):
 				if score_note_adder.add_score == false:
-					Global.score += 500
+					GameWorld.add_score(self, 500)
 				score_note_adder.spawn_note(500)
 
 func die_from_hammer(obj: Node2D) -> void:
@@ -75,6 +77,6 @@ func die_from_hammer(obj: Node2D) -> void:
 	if dir == 0:
 		dir = [-1, 1].pick_random()
 	DiscoLevel.combo_amount += 1
-	AudioManager.play_sfx("hammer_hit", global_position)
+	GameWorld.sfx(self, "hammer_hit", global_position)
 	killed.emit(dir)
 	queue_free()

@@ -38,7 +38,7 @@ func block_dispense_tween() -> void:
 	rising = true
 	var old_z = z_index
 	z_index = -2
-	AudioManager.play_sfx("item_appear", global_position)
+	GameWorld.sfx(self, "item_appear", global_position)
 	set_physics_process(false)
 	set_process(false)
 	global_position.y += 8

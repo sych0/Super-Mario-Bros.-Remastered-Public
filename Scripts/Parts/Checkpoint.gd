@@ -29,6 +29,9 @@ func _enter_tree() -> void:
 	passed = passed_checkpoints.has(id)
 
 func _ready() -> void:
+	if not GameWorld.owns_globals(self):
+		passed = true # a Battle opponent is out when it dies (doc 56): nothing to respawn at, and the real game's record is not its
+		return
 	if [Global.GameMode.CHALLENGE, Global.GameMode.MARATHON_PRACTICE, Global.GameMode.DISCO].has(Global.current_game_mode) or (Settings.file.difficulty.extra_checkpoints == 0 and optional):
 		queue_free()
 		return
@@ -81,4 +84,4 @@ func get_id() -> String:
 	if Global.level_editor != null:
 		return str(Global.level_editor.sub_level_id) + "," + str(Vector2i(global_position)) + "," + get_parent().name
 	else:
-		return Global.current_level.scene_file_path + "," + str(Vector2i(global_position)) + "," + get_parent().name
+		return GameWorld.level(self).scene_file_path + "," + str(Vector2i(global_position)) + "," + get_parent().name

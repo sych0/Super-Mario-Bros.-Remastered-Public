@@ -10,7 +10,7 @@ func enter(_msg := {}) -> void:
 	player.crouching = false
 	player.in_cutscene = true
 	player.get_node("CameraCenterJoint/RightWall").set_collision_layer_value(1, false)
-	for i: Node2D in get_tree().get_nodes_in_group("CastleNPCs"):
+	for i: Node2D in GameWorld.group(player, "CastleNPCs"):
 		if i.global_position < player.global_position:
 			return
 		if i.play_end_music:
@@ -54,7 +54,7 @@ func handle_posing() -> void:
 	if not player.in_cutscene:
 		return
 	if npc_count == [0, 0]:
-		for i: Node2D in get_tree().get_nodes_in_group("EndCastles"):
+		for i: Node2D in GameWorld.group(player, "EndCastles"):
 			var pose_position = i.global_position.x + pose_offset
 			if (player.global_position[0] >= pose_position and player.global_position[0] <= pose_position + 24) and player.can_pose_anim and player.sprite.sprite_frames.has_animation("PoseDoor"):
 				player.is_posing = true; player.can_pose_anim = false
@@ -63,7 +63,7 @@ func handle_posing() -> void:
 				player.sprite.animation_finished.connect(on_pose_finished.bind())
 				player.sprite.animation_looped.connect(on_pose_finished.bind())
 	else:
-		for i: Node2D in get_tree().get_nodes_in_group("CastleNPCs"):
+		for i: Node2D in GameWorld.group(player, "CastleNPCs"):
 			var pose_position = i.global_position.x + pose_offset
 			if (player.global_position[0] >= pose_position and player.global_position[0] <= pose_position + 24):
 				player.is_posing = true; player.can_pose_castle_anim = false

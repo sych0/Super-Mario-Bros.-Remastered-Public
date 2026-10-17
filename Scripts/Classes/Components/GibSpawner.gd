@@ -29,11 +29,11 @@ func summon_gib(direction := 1, play_sfx := play_death_sfx, override_gib_type :=
 	node.direction = direction
 	var parent = owner.get_parent()
 	if global_parent:
-		parent = Global.current_level
+		parent = GameWorld.level(owner)
 	parent.add_child(node)
 
 func play_die_sfx() -> void:
-	AudioManager.play_sfx("kick", owner.global_position)
+	GameWorld.sfx(owner, "kick", owner.global_position)
 
 const SMOKE_PARTICLE = preload("uid://d08nv4qtfouv1")
 
@@ -45,7 +45,7 @@ func summon_poof() -> void:
 func stomp_die(player: Player, add_combo := true) -> void:
 	DiscoLevel.combo_amount += 1
 	owner.killed.emit("Hello")
-	AudioManager.play_sfx("enemy_stomp", owner.global_position)
+	GameWorld.sfx(owner, "enemy_stomp", owner.global_position)
 	player.enemy_bounce_off(add_combo)
 	summon_gib(1, false, 1)
 	owner.queue_free()

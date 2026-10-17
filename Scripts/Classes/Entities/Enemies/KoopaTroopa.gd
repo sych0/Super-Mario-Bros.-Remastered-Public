@@ -59,7 +59,7 @@ func stomped_on(player: Player) -> void:
 	if dead:
 		return
 	player.enemy_bounce_off()
-	AudioManager.play_sfx("enemy_stomp", global_position)
+	GameWorld.sfx(self, "enemy_stomp", global_position)
 	if winged:
 		DiscoLevel.combo_meter = 100
 		DiscoLevel.combo_amount += 1
@@ -92,7 +92,7 @@ func summon_shell(flipped := false, launch := false, cause = null) -> void:
 	shell.old_entity = self.duplicate()
 	shell.direction = direction
 	if launch:
-		AudioManager.play_sfx("kick", global_position)
+		GameWorld.sfx(self, "kick", global_position)
 		shell.can_air_kick = true
 		shell.velocity = Vector2(50 * direction, -150)
 	shell.global_position = global_position

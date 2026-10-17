@@ -50,7 +50,7 @@ func on_player_stomped_on(stomped_player: Player) -> void:
 	else:
 		DiscoLevel.combo_meter += 10
 		moving = false
-		AudioManager.play_sfx("enemy_stomp", global_position)
+		GameWorld.sfx(self, "enemy_stomp", global_position)
 		stomped_player.enemy_bounce_off(true, moving_time > 0.1)
 
 func block_bounced(_block: Block) -> void:
@@ -72,8 +72,8 @@ func award_score(award_level: int) -> void:
 		if [Global.GameMode.CHALLENGE, Global.GameMode.BOO_RACE].has(Global.current_game_mode) or Settings.file.difficulty.inf_lives:
 			$ScoreNoteSpawner.spawn_note(10000)
 		else:
-			AudioManager.play_global_sfx("1_up")
-			Global.lives += 1
+			GameWorld.global_sfx(self, "1_up")
+			GameWorld.add_lives(self, 1)
 			$ScoreNoteSpawner.spawn_one_up_note()
 	else:
 		$ScoreNoteSpawner.spawn_note(COMBO_VALS[award_level])
@@ -101,7 +101,7 @@ func kick(hit_player: Player) -> void:
 		$ScoreNoteSpawner.spawn_note(8000)
 	else:
 		award_score(get_kick_award(hit_player))
-	AudioManager.play_sfx("kick", global_position)
+	GameWorld.sfx(self, "kick", global_position)
 	
 	# Limit the number of times you can kick the same shell.
 	if Global.current_game_mode == Global.GameMode.CHALLENGE:
@@ -168,7 +168,7 @@ func handle_movement(delta: float) -> void:
 	if moving:
 		if is_on_wall():
 			direction *= -1
-			AudioManager.play_sfx("bump", global_position)
+			GameWorld.sfx(self, "bump", global_position)
 		var speed = MOVE_SPEED
 		if is_on_floor() == false:
 			speed = AIR_MOVE_SPEED

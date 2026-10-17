@@ -414,17 +414,25 @@ func get_snapshot_version() -> String:
 func get_int_version_num(version_num := "") -> int:
 	return int(version_num.replace(".", "").pad_zeros(3))
 
+# A Battle opponent's Mario reads its own pad (BattleBotPad) through these, exactly as a person's Mario reads the
+# InputMap: its player id is one no person's pad has.
 func player_action_pressed(action := "", player_id = 0) -> bool:
+	if BattleBotPad.claims(player_id):
+		return BattleBotPad.of(player_id).pressed(action)
 	if SpeedrunHandler.simulating_inputs:
 		player_id = "s"
 	return Input.is_action_pressed(action + "_" + str(player_id))
 
 func player_action_just_pressed(action := "", player_id = 0) -> bool:
+	if BattleBotPad.claims(player_id):
+		return BattleBotPad.of(player_id).just_pressed(action)
 	if SpeedrunHandler.simulating_inputs:
 		player_id = "s"
 	return multibind_action_just_pressed(action + "_" + str(player_id))
 
 func player_action_just_released(action := "", player_id = 0) -> bool:
+	if BattleBotPad.claims(player_id):
+		return BattleBotPad.of(player_id).just_released(action)
 	if SpeedrunHandler.simulating_inputs:
 		player_id = "s"
 	return Input.is_action_just_released(action + "_" + str(player_id))

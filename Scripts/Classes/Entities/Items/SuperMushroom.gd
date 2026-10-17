@@ -19,11 +19,11 @@ func on_area_entered(area: Area2D) -> void:
 
 func give_life(_player: Player) -> void:
 	DiscoLevel.combo_amount += 1
-	AudioManager.play_sfx("1_up", global_position)
+	GameWorld.sfx(self, "1_up", global_position)
 	if [Global.GameMode.CHALLENGE, Global.GameMode.BOO_RACE].has(Global.current_game_mode) or Settings.file.difficulty.inf_lives:
-		Global.score += 2000
+		GameWorld.add_score(self, 2000)
 		$ScoreNoteSpawner.spawn_note(2000)
 	else:
-		Global.lives += 1
+		GameWorld.add_lives(self, 1)
 		$ScoreNoteSpawner.spawn_one_up_note()
 	queue_free()

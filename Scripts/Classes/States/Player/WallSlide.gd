@@ -24,7 +24,7 @@ func physics_update(delta: float) -> void:
 	player.move()
 
 func jump_off() -> void:
-	AudioManager.play_sfx("bump", player.global_position)
+	GameWorld.sfx(player, "bump", player.global_position)
 	player.state_machine.transition_to("Normal")
 	player.jump()
 	player.velocity.x = 120 * player.direction
