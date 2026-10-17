@@ -5,8 +5,9 @@ extends RefCounted
 ## which enemy) and a start time on the presentation clock, and is never read back by the session.
 ##
 ## Two kinds exist, as in the reference (doc 47 B35-TARGET-003, B35-INCOMING-004, B35-ATTACK-002):
-##   the real player's send    the reticle itself flies from the game window to the recipient's pane in SEND_SECONDS, and
-##                             nothing else is drawn for it (no line, no enemy, no pane tint)
+##   the real player's send    the reticle itself holds at the game window, then snaps onto the recipient's pane, together
+##                             taking SEND_SECONDS (doc 52: the reference shows a hold, not a glide), and nothing else is
+##                             drawn for it (no line, no enemy, no pane tint)
 ##   a bot's send at the player a thin red line runs from the sender's pane into the incoming bar (DURATION, then LINGER)
 ##   a bot's send at another bot is not presented at all (no flight is created for it)
 ## Where it is drawn is the view's business (BattleAttackGeometry, BattleTargetReticle, BattleAttackLayer); this class

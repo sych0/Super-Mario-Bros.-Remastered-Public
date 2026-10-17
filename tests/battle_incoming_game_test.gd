@@ -580,7 +580,7 @@ func test_pause_freezes_flights() -> void:
 	var p = FixedPolicy.new()
 	p.target = alive_bot(3)
 	s.attacks.targeting = p
-	var a = s.report_enemy_defeat(0, TYPES.Kind.GOOMBA) # the player's send: the reticle's flight (0.25 s)
+	var a = s.report_enemy_defeat(0, TYPES.Kind.GOOMBA) # the player's send: the reticle's flight (BattleSendStyle.SECONDS)
 	await frames(6)
 	var flight = sc.attack_view.flight_of(a.seq)
 	check(flight != null, "(a reticle flight is in the air)")

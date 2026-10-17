@@ -23,6 +23,7 @@ var E # BattleSession.EventType
 var R # BattleAttack.Resolution
 var P # BattleAttackPresentation
 var F # BattleAttackFlight
+var SS # BattleSendStyle
 var GEO # BattleAttackGeometry
 var LAYOUT # BattleHudLayout
 var K # BattleLevelSketch
@@ -56,6 +57,7 @@ func _run() -> void:
 	A = load("res://Scripts/Classes/Battle/BattleAttack.gd")
 	P = load("res://Scripts/Classes/Battle/BattleAttackPresentation.gd")
 	F = load("res://Scripts/Classes/Battle/BattleAttackFlight.gd")
+	SS = load("res://Scripts/Classes/Battle/BattleSendStyle.gd")
 	GEO = load("res://Scripts/Classes/Battle/BattleAttackGeometry.gd")
 	LAYOUT = load("res://Scripts/Classes/Battle/BattleHudLayout.gd")
 	K = load("res://Scripts/Classes/Battle/BattleLevelSketch.gd")
@@ -199,16 +201,19 @@ func test_flights_from_sends() -> void:
 	var f = pres.flights[0]
 	check(f.seq == a.seq and f.sender == 0 and f.target == a.target and f.target == 9 and f.kind == GOOMBA,
 		"it targets the authoritative recipient (#%d), with the real enemy type and the attack's sequence id" % f.target)
-	check(near_eq(f.duration, F.SEND_SECONDS) and f.linger == 0.0 and near_eq(F.SEND_SECONDS, 0.25), "it is the reticle's flight: %.2f s, and nothing lingers after it lands" % f.duration)
+	check(near_eq(f.duration, F.SEND_SECONDS) and f.linger == 0.0 and F.SEND_SECONDS >= 0.2 and F.SEND_SECONDS <= 0.3, "it is the reticle's flight: %.2f s (doc 47: 0.2-0.3 s), and nothing lingers after it lands" % f.duration)
 	check(pres.records[a.seq].sender == 0 and pres.records[a.seq].target == 9 and pres.records[a.seq].state == A.State.QUEUED,
 		"the record of the attack starts QUEUED")
 	check(pres.counts(9) == Vector2i(1, 0), "the target's queued count is 1")
 	var in_air: Array = pres.player_flights()
 	check(in_air.size() == 1 and in_air[0].seq == a.seq and in_air[0].target == 9 and in_air[0].progress == 0.0 and not in_air[0].cut and pres.player_sending(), "it is the player's flight in the air, at its start")
-	pres.update(F.SEND_SECONDS * 0.5)
+	pres.update(SS.HOLD_SECONDS * 0.5)
 	in_air = pres.player_flights()
-	check(in_air.size() == 1 and in_air[0].progress > 0.5 and in_air[0].progress < 1.0, "half way through, the eased progress is past half (%.2f: it leaves fast)" % in_air[0].progress)
-	pres.update(F.SEND_SECONDS * 0.5 + 0.001)
+	check(in_air.size() == 1 and in_air[0].progress == 0.0, "it holds at the window for SS.HOLD_SECONDS before it moves (doc 52: the reference shows no glide across the screen)")
+	pres.update(SS.HOLD_SECONDS * 0.5 + (F.SEND_SECONDS - SS.HOLD_SECONDS) * 0.5)
+	in_air = pres.player_flights()
+	check(in_air.size() == 1 and in_air[0].progress > 0.0 and in_air[0].progress < 1.0, "past the hold it is snapping onto the recipient's pane (%.2f)" % in_air[0].progress)
+	pres.update((F.SEND_SECONDS - SS.HOLD_SECONDS) * 0.5 + 0.001)
 	check(pres.player_flights().is_empty() and not pres.player_sending() and pres.flights.is_empty(), "after %.2f s it has landed and nothing is left (no tint, no line)" % F.SEND_SECONDS)
 	# a bot sends to a bot: not presented at all (B35-ATTACK-002)
 	var b = s.report_enemy_defeat(5, KOOPA)
@@ -567,9 +572,11 @@ func test_flight_timing() -> void:
 		if e < last_e - 1e-9:
 			forward = false
 		last_e = e
-	check(forward and r.eased(5.0 + F.SEND_SECONDS * 0.5) > 0.5, "it only moves forward, leaving fast and settling (the easing is BattleSendStyle's)")
+	check(forward and r.eased(5.0 + SS.HOLD_SECONDS * 0.5) == 0.0, "it holds at 0 (in the window) for SS.HOLD_SECONDS, moving only forward after that (doc 52: no glide, not an ease the whole way)")
+	check(r.eased(5.0 + F.SEND_SECONDS) > r.eased(5.0 + SS.HOLD_SECONDS), "once the hold ends it snaps onto the recipient's pane by the end of the flight")
 	check(r.strength(5.0 + F.SEND_SECONDS) == 1.0 and r.strength(5.0 + F.SEND_SECONDS + 0.001) == 0.0 and r.finished(5.0 + F.SEND_SECONDS + 0.001), "it is gone the moment it lands: no linger, no tint")
 	check(F.SEND_SECONDS >= 0.2 and F.SEND_SECONDS <= 0.3, "doc 47 B35-TARGET-003: it lands within 0.2-0.3 s")
+	check(SS.HOLD_SECONDS >= 0.0 and SS.HOLD_SECONDS < F.SEND_SECONDS, "doc 52: most of that time is a hold at the window, not a glide across the screen")
 
 # ---- incoming enemies in a preview -------------------------------------------------------------------
 

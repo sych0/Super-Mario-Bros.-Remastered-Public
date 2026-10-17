@@ -7,8 +7,9 @@ extends Control
 ## session and owns no state about the match.
 ##
 ## THE SEND. When the real player's defeat sends an enemy, the reticle itself flies: the bracket leaves its pane, appears at the
-## middle of the game window and flies to the authoritative recipient's pane in BattleAttackFlight.SEND_SECONDS (eased, a
-## straight path, the pane's own size all the way), where it settles as the persistent bracket and punches. Nothing else is drawn
+## middle of the game window, HOLDS there for BattleSendStyle.HOLD_SECONDS (doc 52: the reference shows it sitting in the window,
+## not gliding across the screen), then snaps onto the authoritative recipient's pane for the rest of BattleAttackFlight.SEND_SECONDS
+## (eased, the pane's own size all the way), where it settles as the persistent bracket and punches. Nothing else is drawn
 ## for the send: no line, no enemy, no tint. While a send is in the air the persistent bracket is not shown (it is the one in
 ## the air); with two sends in the air both brackets fly and each lands on its own recipient. The recipient is the attack's
 ## (fixed when it was logged); changing the targeting mode in flight moves the persistent bracket, never a flight. A recipient

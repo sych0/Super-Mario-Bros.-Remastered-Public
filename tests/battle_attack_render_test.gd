@@ -316,7 +316,7 @@ func test_target_reticle_ko(layout: Dictionary) -> void:
 	check(shown == 1, "exactly one pane has a whole bracket")
 
 func test_player_send(layout: Dictionary, game: Rect2) -> void:
-	print("-- the real player's send: the reticle flies")
+	print("-- the real player's send: the reticle holds at the window, then snaps to the pane")
 	await wait_lines_gone()
 	await frames(30)
 	var base := await grab("attack_00_baseline")
@@ -324,19 +324,25 @@ func test_player_send(layout: Dictionary, game: Rect2) -> void:
 	fixed_target(target)
 	var old_target: int = session.target_of(0)
 	var a = session.report_enemy_defeat(0, KIND.GOOMBA)
-	var flew: bool = await wait_flight(a.seq, 0.4)
+	# early: still inside BattleSendStyle.HOLD_SECONDS, so the bracket sits at the window's middle, not moving yet
+	var flew: bool = await wait_flight(a.seq, 0.2)
 	var img := await grab("attack_01_player_send")
 	var view = screen.attack_view
 	var ret = screen.target_reticle
 	var f = view.flight_of(a.seq)
 	check(flew and f != null and f.target == target and ret.flying.size() == 1 and ret.flying[0].target == target, "the reticle is in the air towards the authoritative recipient (#%d)" % target)
-	var progress: float = float(ret.flying[0].progress)
-	var rect: Rect2 = GEO.send_rect(layout, target, progress)
+	var early_progress: float = float(ret.flying[0].progress)
+	check(early_progress == 0.0, "within BattleSendStyle.HOLD_SECONDS it has not started moving yet (doc 52: no glide, the reference holds it in the window)")
+	var window_rect: Rect2 = GEO.send_rect(layout, target, 0.0)
 	var pane: Rect2 = layout.slots[target - 1]
-	check(red_corners_of_rect(img, rect) >= 3, "its bracket is drawn on screen where the flight says (%.2f of the way: %d of 4 corners red)" % [progress, red_corners_of_rect(img, rect)])
-	check(progress > 0.1 and progress < 0.95 and game.has_point(rect.get_center()) or progress > 0.5, "...between the window's middle and the pane")
+	check(red_corners_of_rect(img, window_rect) >= 3, "its bracket is drawn at the window's middle while it holds there (%d of 4 corners red)" % red_corners_of_rect(img, window_rect))
 	check(red_corners_of_rect(img, pane) < 4 and red_corners_of_rect(img, layout.slots[old_target - 1]) < 4, "neither the old target's pane nor the recipient's carries the persistent bracket (it is the one in the air)")
 	check(changed_fraction(img, base, pane.grow(-2.0)) < 0.25, "the recipient pane is not tinted (%.0f %% of its pixels changed)" % [changed_fraction(img, base, pane.grow(-2.0)) * 100.0])
+	# late: past the hold, it has snapped most of the way onto the recipient's pane (doc 52: the crossing itself is 1-2 frames)
+	var flew_late: bool = await wait_flight(a.seq, 0.95)
+	var img_late := await grab("attack_01c_player_send_snapping")
+	var late_progress: float = float(ret.flying[0].progress) if ret.flying.size() == 1 else 1.0
+	check(flew_late and late_progress > early_progress, "past the hold the bracket is snapping onto the recipient's pane (%.2f)" % late_progress)
 	# no gold line, no enemy riding it, no frame flash
 	var from: Vector2 = GEO.send_start(layout)
 	var to: Vector2 = pane.get_center()
@@ -344,13 +350,13 @@ func test_player_send(layout: Dictionary, game: Rect2) -> void:
 	for k in range(1, 9):
 		var p := from.lerp(to, 0.1 * k)
 		var behind: Vector2 = p.lerp(from, 0.5)
-		if absf(progress - 0.0) > 0.0 and px(img, behind.x, behind.y + 8.0).r > 0.97 and px(img, behind.x, behind.y + 8.0).g > 0.85 and px(img, behind.x, behind.y + 8.0).b < 0.5:
+		if px(img_late, behind.x, behind.y + 8.0).r > 0.97 and px(img_late, behind.x, behind.y + 8.0).g > 0.85 and px(img_late, behind.x, behind.y + 8.0).b < 0.5:
 			line_hits += 1
 	check(line_hits == 0, "no gold line trails behind it (%d gold samples)" % line_hits)
 	var lit := 0
 	for k in 6:
 		var y: float = game.position.y + 30.0 + k * 30.0
-		if px(base, game.position.x - 2.0, y).g - px(img, game.position.x - 2.0, y).g > 0.1:
+		if px(base, game.position.x - 2.0, y).g - px(img_late, game.position.x - 2.0, y).g > 0.1:
 			lit += 1
 	check(lit == 0, "the game window's frame does not flash (%d of 6 samples changed)" % lit)
 	# it lands, and one bracket is left
