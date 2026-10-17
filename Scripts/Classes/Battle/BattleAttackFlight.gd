@@ -55,10 +55,6 @@ func strength(clock: float) -> float:
 func finished(clock: float) -> bool:
 	return strength(clock) <= 0.0
 
-## How long ago it was launched (for the launch ring), in seconds.
-func age(clock: float) -> float:
-	return clock - born
-
 ## How long a send from `sender` to `target` takes to land (the player's reticle flight is brisk; a bot's line to the bar is not).
 static func duration_for(sender: int) -> float:
 	return SEND_SECONDS if sender == BattleSession.PLAYER_ID else DURATION
