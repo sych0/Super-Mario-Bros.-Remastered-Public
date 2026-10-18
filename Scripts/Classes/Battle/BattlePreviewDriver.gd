@@ -38,8 +38,13 @@ var _pushed_tick := -1
 
 ## Null if the first course's level or art cannot be built (everything then stays on the placeholder). A later course whose level
 ## cannot be built is shown by a stand-in (BattlePreviewStages), so a preview never ends in the placeholder.
+## `ids` are the opponents the previews may draw: never a world-driven one (doc 57). One is refused (BattleBotDirector.violation),
+## and the stages refuse its courses too.
 static func create(session_: BattleSession, ids: Array, logical_w: float) -> BattlePreviewDriver:
 	var st := BattlePreviewStages.new()
+	for c in session_.contestants:
+		if c.world_driven:
+			st.forbidden[c.id] = true
 	var first := st.stage(FIRST_COURSE)
 	if first.is_empty():
 		return null
@@ -50,8 +55,11 @@ static func create(session_: BattleSession, ids: Array, logical_w: float) -> Bat
 	d.stages = st
 	var view_w := BattleMiniGameRenderer.world_width(logical_w)
 	for id in ids:
+		if session_.contestants[id].world_driven:
+			BattleBotDirector.violation(id, "was given to the legacy previews (BattlePreviewDriver): refused")
+			continue
 		var course := session_.contestants[id].levels_cleared # (0 at the start of a match; a driver made mid-match starts where each opponent is)
-		var stage := st.stage(course)
+		var stage := st.stage(course, id)
 		if stage.is_empty():
 			stage = first
 			course = FIRST_COURSE
@@ -91,7 +99,7 @@ func _push() -> void:
 		var c := session.contestants[id]
 		tracks[id].push(session.tick_count, c.levels_cleared, c.progress, c.power, c.alive, by_id.get(id, []))
 		if c.alive and c.progress >= BattlePreviewStages.PREFETCH_PROGRESS and not stages.is_built(c.levels_cleared + 1):
-			stages.prefetch(c.levels_cleared + 1) # the next course's art is baked well before the picture needs it
+			stages.prefetch(c.levels_cleared + 1, id) # the next course's art is baked well before the picture needs it
 
 ## Holds every picture at a state that can be shown at rest (the round is over): a pane caught in the dark between two courses is on the
 ## next one. Nothing else changes, and the tracks are not stepped again.

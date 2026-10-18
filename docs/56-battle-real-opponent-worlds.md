@@ -249,7 +249,8 @@ the reference (A8), including power-ups, warp zones and coins (with the coin eco
 | the 35 game files of section 4; `BattleSession`, `BattleAttackSystem`, `BattleIncomingSpawner`, `BattleContestant`, `BattleHandler`, `BattleScreen`, `BattlePreviewCell` | the seam's call sites; world-driven contestants; attacks on any real game; the pane drawing a world's screen |
 | `tests/battle_bot_world_test.gd`, `battle_bot_screen_test.gd`, `battle_bot_render_test.gd`, `tests/tools/battle_bot_bench.gd` | section 19 |
 
-**Turning it on.** `godot --path . -- --battle-real-bots=N` (or `SMB1R_BATTLE_REAL_BOTS=N`): in Battle, opponents 1..N play the real game
+**Turning it on.** `godot --path . -- --battle-real-bots=N` (or `SMB1R_BATTLE_REAL_BOTS=N`; since doc 57 also without the `--`, which this
+pass silently read as 0): in Battle, opponents 1..N play the real game
 from 1-1 and their panes show it; 0 (the default) is the build of `2480e30` exactly - no world, no pad, `GameWorld.bot_worlds == 0`, every
 seam call the old expression. N = 34 runs, at the cost of section 17.
 

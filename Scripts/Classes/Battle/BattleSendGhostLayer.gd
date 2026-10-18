@@ -1,10 +1,11 @@
 class_name BattleSendGhostLayer
 extends Control
 ## Draws the ghosts of enemy sends (BattleSendGhost, doc 55) over the opponent panes: for each send a translucent copy of the sent enemy flies
-## from the middle of the sender to the middle of the recipient's pane in 0.5 s, and bursts there. It is drawn only inside the panes' own
-## rectangles (a ghost is seen leaving the sender's pane, crossing the panes on its way and arriving on the recipient's; never over the game
-## window or the gaps), under the target reticle and the red lines. A view only: it reads the presentation and the layout, owns no state
-## of its own, and draws nothing for a send at the real player.
+## from the middle of the sender to the middle of the recipient's pane in 0.5 s, and bursts there. It is drawn only inside its sender's own
+## window and the panes' rectangles (BattleSendGhost.clip_rects: a ghost is seen leaving the sender's pane, or the game window for the real
+## player, crossing the panes on its way and arriving on the recipient's; never over the gaps), under the target reticle and the red lines.
+## The real player's sends and a bot's are drawn by the same code from the same SENT event (doc 57). A view only: it reads the presentation
+## and the layout, owns no state of its own, and draws nothing for a send at the real player.
 
 ## Dev measurements: microseconds spent in _draw() and how many draws ran.
 static var stat_draw_us := 0
@@ -69,7 +70,10 @@ func _draw() -> void:
 	stat_draw_us += Time.get_ticks_usec() - t0
 	stat_draws += 1
 
-func _draw_ghost(g: Dictionary) -> void:
+## How ghost `g` (one of `drawn()`) is drawn: {art (its picture; null: a plain shape), rect (its whole body, centred on its point of
+## the path), pieces (each [canvas rect, texture rect]: the parts of the body inside its sender's own window and the panes)}. One rule
+## for every sender (doc 57); who sent it only moves the path's start and the window it leaves. (Pure: tests read what is drawn.)
+func ghost_look(g: Dictionary) -> Dictionary:
 	var centre := BattleSendGhost.point(layout, int(g.sender), int(g.target), BattleSendGhost.progress(float(g.age)))
 	var art := ghost_art(int(g.kind))
 	var rect: Rect2
@@ -79,11 +83,17 @@ func _draw_ghost(g: Dictionary) -> void:
 		tex_size = art.texture.get_size()
 	else:
 		rect = BattleSendGhost.body_rect(Vector2(16, 16 if int(g.kind) == BattleEnemyType.Kind.GOOMBA else 24), centre)
-	for i in (layout.slots as Array).size():
-		var pane: Rect2 = layout.slots[i]
-		var cut := BattleSendGhost.clipped(rect, pane, tex_size)
-		if cut[0].size.x <= 0.0:
-			continue
+	var pieces: Array = []
+	for clip in BattleSendGhost.clip_rects(layout, int(g.sender)):
+		var cut := BattleSendGhost.clipped(rect, clip, tex_size)
+		if cut[0].size.x > 0.0:
+			pieces.append(cut)
+	return {"art": art, "rect": rect, "pieces": pieces}
+
+func _draw_ghost(g: Dictionary) -> void:
+	var look := ghost_look(g)
+	var art: BattlePreviewSprite = look.art
+	for cut in look.pieces:
 		if art != null:
 			draw_texture_rect_region(art.texture, cut[0], cut[1], Color(1, 1, 1, 1))
 		else:

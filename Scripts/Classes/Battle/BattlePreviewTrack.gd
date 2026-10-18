@@ -639,7 +639,7 @@ func _step_fade() -> void:
 func _enter_next_course() -> bool:
 	if stages == null or course + 1 >= BattleCourse.COURSE_COUNT:
 		return false
-	var st := stages.stage(course + 1)
+	var st := stages.stage(course + 1, id)
 	if st.is_empty():
 		return false
 	var want: int = _clear().get("power_to", -1)

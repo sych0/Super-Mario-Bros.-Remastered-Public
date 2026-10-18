@@ -99,6 +99,7 @@ var _applied_visuals := -1
 var _freeze_stretch := TextureRect.STRETCH_SCALE
 var _warned_root_camera := false
 var _attack_session: BattleSession = null ## the session the attack presentation was last set up for
+var _owners_session: BattleSession = null ## the session whose opponents were last given their owners (real worlds, previews)
 
 # ---- static API used by the rest of the game -------------------------------------------------
 
@@ -480,23 +481,21 @@ func _follow_game_camera() -> void:
 	if camera != null:
 		audio_listener.global_position = camera.get_screen_center_position()
 
-## Creates the preview driver for the current session (once). All 34 opponents get a track and
-## draw live on whatever course they are on (a preview that clears its course moves on to the next one, doc 55); a cell falls back to
-## the placeholder on its own whenever its frame is not valid (only after the last course). If the first level or its art can't be
-## built, nothing live is shown and every cell keeps the placeholder.
+## Gives every opponent of the current session its owner, once per session (doc 57). A world-driven opponent gets its
+## BattleBotWorld, which owns its game and its pane's picture for the whole round; it is never given to the previews, whatever
+## they can or cannot build. Every other opponent gets a legacy preview track and draws live on whatever course it is on (a
+## preview that clears its course moves on to the next one, doc 55); such a cell falls back to the placeholder on its own whenever
+## its frame is not valid (only after the last course). If the first level or its art can't be built, no legacy preview is live and
+## those cells keep the placeholder; the real worlds are not affected.
 func _ensure_driver() -> void:
-	if session == null or not live_previews or (driver != null and driver.session == session):
+	if session == null or session == _owners_session:
 		return
+	_owners_session = session
 	driver = null
 	for cell in cells:
-		cell.set_live(null, null) # nothing of a previous session's pictures may linger
-		cell.set_bot(null)
+		cell.release() # nothing of a previous session's pictures may linger
 	_free_bots()
-	var ids: Array = range(1, BattleHudLayout.OPPONENTS + 1)
-	var real: Array = []
-	for id in ids:
-		if session.contestants[id].world_driven:
-			real.append(id)
+	var real := BattleBotDirector.world_driven_ids(session)
 	if not real.is_empty():
 		bots = BattleBotDirector.new(session)
 		bots.follow = game_viewport
@@ -504,8 +503,10 @@ func _ensure_driver() -> void:
 		bots.start(real)
 		for id in real:
 			cells[id - 1].set_bot(bots.world(id))
-			ids.erase(id)
-	driver = BattlePreviewDriver.create(session, ids, float(BattlePreviewAtlas.CELL_PX.x))
+		print(BattleBotDirector.describe(session))
+	if not live_previews:
+		return
+	driver = BattlePreviewDriver.create(session, BattleBotDirector.legacy_ids(session), float(BattlePreviewAtlas.CELL_PX.x))
 	if driver == null:
 		return
 	for id in driver.tracks:
@@ -755,9 +756,9 @@ func _start_next_round() -> void:
 	_set_game_frozen(false)
 	field_frozen = false
 	for cell in cells:
-		cell.set_live(null, null) # the new session gets its own tracks
-		cell.set_bot(null)
+		cell.release() # the new session gives each cell its own owner
 	driver = null
+	_owners_session = null
 	_free_bots()
 	_clear_attack_view() # no line, marker or strip icon of the finished round survives
 	BattleHandler.start_match()

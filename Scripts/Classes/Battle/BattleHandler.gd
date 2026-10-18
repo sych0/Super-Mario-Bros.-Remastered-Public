@@ -99,7 +99,7 @@ func _process(delta: float) -> void:
 		time_up_wait -= delta
 		if time_up_wait <= 0.0:
 			time_up_wait = TIME_UP_RETRY_SECONDS
-			get_tree().call_group("Players", "time_up")
+			GameWorld.call_group(self, &"Players", &"time_up") # the real player's Mario only, never a real opponent's (doc 57)
 	# (A win - everyone else out - is noticed by BattleScreen, which also sees it between levels.)
 
 ## Live progress of the real player = how far they are between where they started the level
@@ -107,7 +107,7 @@ func _process(delta: float) -> void:
 func _report_progress(session: BattleSession) -> void:
 	if level_completed:
 		return
-	var player := get_tree().get_first_node_in_group("Players") as Node2D
+	var player := GameWorld.first_player(self) as Node2D # this game's Mario (a real opponent's is in the same group, doc 57)
 	if player == null:
 		return
 	if not progress_searched:

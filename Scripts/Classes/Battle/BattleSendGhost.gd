@@ -5,8 +5,10 @@ extends RefCounted
 ## said a bot's send at another bot is not drawn at all; both were wrong. Every send, the real player's and a bot's, is a GHOST of the sent
 ## enemy: a translucent grey-teal copy of it, about 2.5 times the size it has in a level, that flies in a straight line at constant speed
 ## from the middle of the sender (the sender's pane; the game window for the real player) to the middle of the recipient's pane in
-## FRAMES (30) frames, 0.5 s. It is drawn only where it crosses a pane, so a pane shows it leave (the sender's), cross (any pane on the
-## way) and arrive (the recipient's); it is never drawn over the game window or the gaps between the panes. When it reaches the middle
+## FRAMES (30) frames, 0.5 s. It is drawn only inside its sender's own window and the panes (`clip_rects`), so it is seen leave its sender
+## (a bot's pane; the game window for the real player, doc 57), cross any pane on the way and arrive on the recipient's; it is never drawn
+## over the gaps between them. Who sent it changes only where it starts and the window it leaves; everything else is the same for every
+## sender: one path, one picture, one timeline, one burst. When it reaches the middle
 ## of the recipient's pane it bursts: a white rounded square grows from 11 to 23 units over four frames, goes translucent and fades as a
 ## rim round the pane's edge (FLASH_FRAMES, 11 frames, 0.18 s). A send at the real player has no ghost on any pane (its red line and
 ## its icon in the incoming bar are its picture).
@@ -89,6 +91,20 @@ static func end_point(layout: Dictionary, target: int) -> Vector2:
 ## The ghost's middle `progress` (0..1) of the way: a straight line at constant speed.
 static func point(layout: Dictionary, sender: int, target: int, progress_: float) -> Vector2:
 	return start_point(layout, sender).lerp(end_point(layout, target), clampf(progress_, 0.0, 1.0))
+
+## The rectangles a ghost from `sender` is drawn in: the sender's own window (BattleAttackGeometry.rect_of: its pane, or the game
+## window for the real player), then every pane. The same rule for every sender (doc 57): the ghost is seen leaving the window it was
+## sent from. For a bot that window is its own pane, already one of the panes, so its ghost is drawn exactly as before; for the real
+## player it is the game window, which the panes-only rule of doc 55 left out, so their ghost was only seen for its last 2-3 frames.
+static func clip_rects(layout: Dictionary, sender: int) -> Array[Rect2]:
+	var out: Array[Rect2] = []
+	var own := BattleAttackGeometry.rect_of(layout, sender)
+	var slots: Array = layout.slots
+	if not slots.has(own):
+		out.append(own)
+	for r in slots:
+		out.append(r)
+	return out
 
 ## The rectangle a ghost of the `size`-pixel sprite is drawn in, centred on `centre`, in canvas units.
 static func body_rect(size: Vector2, centre: Vector2) -> Rect2:

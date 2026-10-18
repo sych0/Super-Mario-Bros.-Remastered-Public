@@ -180,7 +180,43 @@ func test_clipping() -> void:
 	for r in layout.slots:
 		var c: Array[Rect2] = G.clipped(body, r, Vector2(66, 66))
 		drawn += c[0].size.x * c[0].size.y
-	check(not any_in_window and drawn == 0.0, "the middle of the game window is in no pane: a send leaves it unseen")
+	check(not any_in_window and drawn == 0.0, "the middle of the game window is in no pane (the panes-only rule left the real player's ghost unseen there)")
+	# doc 57: a ghost is drawn in its sender's own window too: the game window for the real player, its pane for a bot.
+	var player_clips: Array[Rect2] = G.clip_rects(layout, 0)
+	check(player_clips.size() == 35 and player_clips[0] == game and player_clips.slice(1) == layout.slots,
+		"the real player's ghost is drawn in the game window it leaves, then the panes")
+	var drawn_now := 0.0
+	for r in player_clips:
+		var c: Array[Rect2] = G.clipped(body, r, Vector2(66, 66))
+		drawn_now += c[0].size.x * c[0].size.y
+	check(near(drawn_now, body.size.x * body.size.y, 0.01), "so it is seen whole leaving the window's middle (%.1f of %.1f)" % [drawn_now, body.size.x * body.size.y])
+	var bots_same := true
+	for sender in range(1, 35):
+		bots_same = bots_same and G.clip_rects(layout, sender) == layout.slots
+	check(bots_same, "a bot's own window is its pane, already a pane: every bot's ghost is clipped exactly as before (all 34)")
+	# every bot ghost draws the same pieces under the new rule as under the old panes-only one
+	var pieces_same := true
+	var samples := 0
+	for sender in [1, 5, 12, 20, 23, 34]:
+		for target in [2, 9, 17, 23, 33]:
+			if target == sender:
+				continue
+			for i in 31:
+				var centre: Vector2 = G.point(layout, sender, target, i / 30.0)
+				var ghost_rect: Rect2 = G.body_rect(Vector2(16, 16), centre)
+				var old_pieces := []
+				for r in layout.slots:
+					var c: Array[Rect2] = G.clipped(ghost_rect, r, Vector2(66, 66))
+					if c[0].size.x > 0.0:
+						old_pieces.append(c)
+				var new_pieces := []
+				for r in G.clip_rects(layout, sender):
+					var c: Array[Rect2] = G.clipped(ghost_rect, r, Vector2(66, 66))
+					if c[0].size.x > 0.0:
+						new_pieces.append(c)
+				pieces_same = pieces_same and str(old_pieces) == str(new_pieces)
+				samples += 1
+	check(pieces_same, "bot -> bot ghosts are drawn exactly as before, piece for piece (%d frames sampled)" % samples)
 	var in_pane: Rect2 = G.body_rect(Vector2(16, 16), (layout.slots[9] as Rect2).get_center())
 	var area := 0.0
 	for r in layout.slots:

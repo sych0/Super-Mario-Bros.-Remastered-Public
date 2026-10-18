@@ -22,6 +22,11 @@ const PREFETCH_PROGRESS := 0.5 ## a bot this far through its course gets the nex
 
 var _stages := {} ## course -> {course, geometry, sketch, assets, stand_in}, or null if nothing could be built for it
 var _failed := {} ## geometry courses whose sketch or art did not build
+## Contestant ids the stages are never asked for: the world-driven opponents (doc 57), whose real BattleBotWorld shows its real
+## course. Asking for one is refused ({}) and reported (BattleBotDirector.violation); it never gets a sketch or a stand-in.
+var forbidden := {}
+## Every stage request with the contestant it was for: [id, course] (0 = not said). Tests read it.
+var queries: Array[Vector2i] = []
 
 ## The course whose level is drawn for `course`: `course` itself if it can be shown, else the next course of `sketched` (ascending, wrapping)
 ## after the one drawn for the course before it, skipping the one the next course shows itself. -1 if no course at all can be shown.
@@ -55,8 +60,12 @@ static func _usable(course: int, sketched: Array, failed: Dictionary) -> bool:
 	return course >= 0 and course < BattleCourse.COURSE_COUNT and sketched.has(course) and not failed.has(course)
 
 ## The stage of `course` ({course, geometry, sketch, assets, stand_in}), built on first use; {} if none can be built. Baking art takes
-## about 0.1 s per level, so `prefetch` is called ahead of time.
-func stage(course: int) -> Dictionary:
+## about 0.1 s per level, so `prefetch` is called ahead of time. `for_id` is the contestant whose preview asks (0: none in particular).
+func stage(course: int, for_id := 0) -> Dictionary:
+	queries.append(Vector2i(for_id, course))
+	if forbidden.has(for_id):
+		BattleBotDirector.violation(for_id, "had BattlePreviewStages asked for course %d: refused" % course)
+		return {}
 	if _stages.has(course):
 		var cached: Variant = _stages[course]
 		if cached != null and not _failed.has(cached.geometry):
@@ -80,9 +89,16 @@ func stage(course: int) -> Dictionary:
 	return {}
 
 ## Builds the stage of `course` now if it is not built yet (a no-op for a course out of range or already built).
-func prefetch(course: int) -> void:
+func prefetch(course: int, for_id := 0) -> void:
 	if course >= 0 and course < BattleCourse.COURSE_COUNT and not _stages.has(course):
-		stage(course)
+		stage(course, for_id)
+
+## Whether a stage was ever asked for on behalf of contestant `id`.
+func queried_for(id: int) -> bool:
+	for q in queries:
+		if q.x == id:
+			return true
+	return false
 
 func is_built(course: int) -> bool:
 	return _stages.get(course) != null

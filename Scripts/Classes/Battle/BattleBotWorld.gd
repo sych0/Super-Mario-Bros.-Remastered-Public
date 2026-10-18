@@ -89,6 +89,14 @@ var _spawner: BattleIncomingSpawner = null
 var _cleared_reported := false
 ## How this opponent's Mario died, as the game killed him: {pit, source, x, y, course, tick, near} (empty while alive).
 var death := {}
+## Why this world cannot go on playing its real course ("" while it can): its level did not load or is not the course's real
+## scene, or it has no Mario. Set together with a push_error; the game stops and the pane shows the failure (doc 57), never
+## anything standing in for the course.
+var failure := ""
+## Every course this world entered, in order: {from, course, requested (the course's scene path), loaded (the scene actually
+## instanced), old_level (a WeakRef to the level it left, or null), level, player, viewport (instance ids), viewport_rid,
+## texture (RID ids), tick} (doc 57's trace; tests and the transition trace read it).
+var transitions: Array[Dictionary] = []
 
 func _init(contestant_id_ := 1, session_: BattleSession = null, seed_ := 0) -> void:
 	contestant_id = contestant_id_
@@ -256,13 +264,44 @@ func is_clearing() -> bool:
 # ---- levels ----------------------------------------------------------------------------------------------------------
 
 func _load_course(course_: int) -> void:
+	var from := course
 	course = course_
 	world_num = BattleCourse.world_of(course)
 	level_num = BattleCourse.level_of(course)
 	_cleared_reported = false
-	_swap_scene(BattleCourse.scene_path(course))
+	var path := BattleCourse.scene_path(course)
+	var old_level: Level = level if is_instance_valid(level) else null
+	if path == "":
+		_fail("course %d has no level scene" % course)
+		return
+	_swap_scene(path)
+	if failure == "" and (not is_instance_valid(level) or level.scene_file_path != path):
+		_fail("course %s should be %s but its level is %s" % [BattleCourse.text(course), path,
+			level.scene_file_path if is_instance_valid(level) else "missing"])
+	if failure == "" and not is_instance_valid(player):
+		_fail("course %s (%s) has no Mario" % [BattleCourse.text(course), path])
+	var tex := pane_texture()
+	transitions.append({"from": from, "course": course, "requested": path, "loaded": level.scene_file_path if is_instance_valid(level) else "",
+		"old_level": weakref(old_level) if old_level != null else null, "level": level.get_instance_id() if is_instance_valid(level) else 0,
+		"player": player.get_instance_id() if is_instance_valid(player) else 0, "viewport": viewport.get_instance_id(),
+		"viewport_rid": viewport.get_viewport_rid().get_id(), "texture": tex.get_rid().get_id() if tex != null else 0, "tick": ticks})
+	if failure != "":
+		return
+	if OS.is_debug_build() and transitions.size() > 1:
+		print("Battle: opponent #%d %s -> %s: its world loaded %s (level %d, Mario %d) into the same viewport (RID %d); its pane shows that world" % [
+			contestant_id, BattleCourse.text(from), BattleCourse.text(course), path, transitions[-1].level, transitions[-1].player,
+			transitions[-1].viewport_rid])
 	phase = Phase.PLAYING
 	course_entered.emit(course)
+
+## This world cannot play its real course: it stops, says why, and its pane shows the failure. In a debug build that is an
+## error in the output; it is never hidden behind another picture.
+func _fail(why: String) -> void:
+	failure = why
+	phase = Phase.FINISHED
+	push_error("BattleBotWorld #%d: %s" % [contestant_id, why])
+	if is_instance_valid(level):
+		level.process_mode = Node.PROCESS_MODE_DISABLED
 
 ## Leaves this level for `path` without leaving the course (a pipe to a bonus room or to a course's last part). Called
 ## through GameWorld.transition_to_scene, where the real player's game would change the whole scene.
@@ -286,10 +325,12 @@ func _swap_scene(path: String) -> void:
 	scene_path = path
 	var packed := packed_scene(path)
 	if packed == null:
-		push_error("BattleBotWorld: cannot load " + path)
-		phase = Phase.FINISHED
+		_fail("cannot load " + path)
 		return
 	var lvl := packed.instantiate() as Level
+	if lvl == null:
+		_fail(path + " is not a level")
+		return
 	_prepare(lvl)
 	level = lvl
 	camera_right_limit = 99999999
