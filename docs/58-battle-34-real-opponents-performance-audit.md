@@ -15,8 +15,8 @@ acceptable performance, **without** reverting to a fake simulation. Not in scope
 | 2 | Threading verdict | DONE |
 | 3 | Rendering strategy | DONE |
 | 4 | Load / preload / hitch strategy | DONE |
-| 5 | Memory strategy | PENDING |
-| 6 | Architecture decision (stop/go) | PENDING |
+| 5 | Memory strategy | DONE |
+| 6 | Architecture decision (stop/go) | DONE |
 | 7 | Ordered implementation plan for Hermes | PENDING |
 | 8 | Cheap benchmark / spike tasks | PENDING |
 | 9 | Target-machine (Plex Mac) benchmark | PENDING |
@@ -293,3 +293,83 @@ fully built level)
    freed the same way (s1 item 3); its pane keeps the last rendered picture (the viewport is not re-rendered).
 6. **Do not** build level node trees on worker threads beyond `instantiate()` (the in-tree block instancing cannot move), and never block the
    main thread on a worker that touches resources (deadlock, measured).
+
+## 5. Memory strategy (DONE)
+
+### 5.1 Measured (`battle_bot_cost_audit.gd`, `AUDIT memory`, headless `MEMORY_STATIC`, after 1 s of play)
+
+| Course | 1 world (incl. shared resources) | 8 worlds | Per additional world | 34 worlds (projected) |
+|---|---|---|---|---|
+| 1-1 | 25.7 MB | 69.2 MB | **6.2 MB** (matches doc 56) | ~230 MB |
+| 1-2 | 48.0 MB | 241.9 MB | **27.7 MB** | **~960 MB** |
+
+Per-world memory is node data, not art: textures, `SpriteFrames`, scripts and `PackedScene`s are already shared (doc 56 s8; Godot shares loaded
+resources; `ResourceSetterNew` caches per skin state; bot `TileSet` copies are per texture set, not per world). 1-2's ~430 block scenes at 16
+nodes each (~64 KB per block with their script instances, physics bodies and canvas items) are the bulk. With the GL renderer, canvas items
+cost more than in headless; the 34 viewports' render targets are small (256x240 RGBA: ~0.25 MB each, ~8 MB total).
+
+Shared-resource audit for the per-frame writers: Mario's per-frame `shape.size` writes go to `resource_local_to_scene` shapes
+(`Player.tscn`: Hitbox, BlockCollision) - per instance, so no cross-world contamination and no accidental sharing to fix.
+
+### 5.2 Strategy
+
+1. **Free a KO'd world's level** (s1 item 3, s4 item 5): its game is over; keep only the pane's last picture. Returns 6-28 MB per KO; with the
+   reference's KO curve (10 out by 35 s, 20 by 95 s) most of the peak is transient.
+2. **Lean derived block scenes** for bot worlds (s4 item 3): ~25 % fewer nodes per block (4 of 16 are editor-only).
+3. **Never hold two full levels per world** except during a staged clear (s4 item 4), which is bounded by how many worlds are clearing at
+   once; the previous level is freed at the cut (in slices).
+4. **Do not duplicate resources per world.** Any new per-world copy (a material, a TileSet, a SpriteFrames) must be keyed by its content
+   and shared, as `tileset_with` does. Check with `AUDIT memory` when adding one.
+5. Budget: the peak is the round start with all 34 alive on the same early course; 1-1 is cheap (230 MB); a brick course is ~1 GB today and
+   ~0.7 GB after item 2. Measure on the Mac (s9 prints it); if the target has 8 GB of unified memory shared with the GPU, item 2 matters.
+
+## 6. Architecture decision (DONE)
+
+### 6.1 Can REAL LEVEL SCENE + REAL PLAYER + REAL ENEMIES per opponent reach 34?
+
+What the measurements say about where the cost is (s1.3, per world-frame, this CPU):
+
+| | 1-1 | 1-2 |
+|---|---|---|
+| **the rules** (Mario's state machine + `Player.gd` + collision polygon + enemies) | ~270 us (26 %) | ~390 us (11 %) |
+| the physics server step (the real collisions) | ~170 us (16 %) | ~200 us (6 %) |
+| **not rules**: decoration / editor `_process`, screen emulation, transform traffic, spawner, background | ~330 us (32 %) | ~2 500 us (70 %) |
+| brain | ~170 us (16 %) | ~100 us (3 %) |
+| rendering a pane (s3) | per pane rendered; halves at 30 Hz | |
+
+The rules are a minority of the cost, and the majority is fixable locally without touching a rule (s1.4 items 1-3, 8; s3; s4). After the
+low-risk items a world costs ~0.7-1.05 ms on this 2.1 GHz cloud core (s1.5): 34 worlds ~24-36 ms of simulation on one thread here. A current
+Apple-silicon performance core runs GDScript-heavy single-threaded work roughly 2-2.5x faster than this vCPU (an estimate, not a measurement:
+s9 replaces it), which puts 34 worlds at ~10-16 ms on the Mac, plus the real player's game, the Battle screen and 17 pane renders a frame.
+**Plausible at 60 fps on 1-1-like starts; tight on a brick course with all 34 alive; to be settled by s9.** KOs then lower the cost quickly
+once their levels are freed (s5 item 1).
+
+### 6.2 Would a deeper split (gameplay/rules state vs Godot presentation/node graph) pay?
+
+* It would attack the 11-26 % that is rules, and at best halve it (GDScript rules in a tighter form, or C++): ~0.15-0.2 ms per world, ~5-7 ms
+  for 34 on this CPU. The 70 % on brick courses is not rules and would remain.
+* It means re-expressing `Player.gd` (1 778 lines), the state machine, every enemy and block, and the collision semantics of `move_and_slide`
+  outside the node graph, and then running the **real player's game on it too** (otherwise the bots run a second engine: the facsimile doc 56
+  rejected). That is the largest refactor in the project for a single-digit-ms gain.
+* Its one strategic benefit would be thread safety (s2: host-neutral state could be stepped on the worker pool). It is not needed to reach 34.
+
+### 6.3 Player.gd / enemies as host-neutral rules + thin adapters?
+
+Not now. If a later measurement (s9, after R2) shows the rules themselves are what stops 34, the **minimum useful boundary** is narrow:
+Mario's motion integration only - the `Normal` state's horizontal acceleration / deceleration, gravity selection, jump and bounce rules - as a
+pure function of (position, velocity, input, power-state params, floor / wall / ceiling contacts) returning the new velocity, with
+`move_and_slide` and every contact staying in Godot. Both `Player.gd` and the brain's `_sim` would call it (the brain would then predict with
+the game's own rules instead of a model of them, a correctness win), and the hot path would stop resolving `physics_params` by string each
+frame. Enemies stay as they are (they are 7-10 % of a world). Everything else (blocks, items, flags, pipes) stays node-based.
+
+### 6.4 Decision
+
+**GO: optimize the current architecture.** Do not prepare a simulation/presentation split.
+
+* The real-opponent architecture stays exactly as accepted (real scenes, real Mario, real enemies, real physics, panes = the real worlds).
+* R2 is the ordered plan of s7: the low-risk local items, render cadence, load spreading and cache warming, then the shared Player hot path,
+  each measured with `battle_bot_cost_audit.gd`.
+* **STOP-and-reconsider criterion** (the only condition that reopens 6.2/6.3): after s7 steps 1-8, the Mac benchmark (s9) still shows
+  **simulation alone > 12 ms for 34 alive worlds** on the worst early course, *and* the audit's breakdown shows the rules (state machine +
+  `Player.gd` + enemies) are more than half of it. Then do 6.3's narrow motion boundary first, not a full split.
+* Threads stay off the worlds (s2).

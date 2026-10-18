@@ -55,6 +55,7 @@ func _run() -> void:
 	var session = S.begin(seed_value)
 	session.attacks.bots_send = false
 	var worlds := []
+	var mem0 := Performance.get_monitor(Performance.MEMORY_STATIC)
 	for i in n_worlds:
 		session.set_world_driven(i + 1)
 		var w = W.new(i + 1, session, seed_value)
@@ -67,6 +68,8 @@ func _run() -> void:
 		await process_frame
 		if f % 60 == 59:
 			session.step()
+	print("AUDIT memory course=%d n=%d static_MB=%.1f (%.2f per world, the first world's shared resources included)" % [course, n_worlds,
+		(Performance.get_monitor(Performance.MEMORY_STATIC) - mem0) / 1048576.0, (Performance.get_monitor(Performance.MEMORY_STATIC) - mem0) / 1048576.0 / n_worlds])
 	_census(worlds)
 	_micro(worlds)
 	await _probed(worlds, session)
