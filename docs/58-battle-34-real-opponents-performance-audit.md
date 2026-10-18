@@ -12,7 +12,7 @@ acceptable performance, **without** reverting to a fake simulation. Not in scope
 | # | Section | State |
 |---|---|---|
 | 1 | Bottleneck ranking, with measurements | DONE (simulation; rendering in s3) |
-| 2 | Threading verdict | PENDING |
+| 2 | Threading verdict | DONE |
 | 3 | Rendering strategy | PENDING |
 | 4 | Load / preload / hitch strategy | PENDING |
 | 5 | Memory strategy | PENDING |
@@ -23,8 +23,9 @@ acceptable performance, **without** reverting to a fake simulation. Not in scope
 | 10 | Handoff state | PENDING |
 
 Measurement environment for every number in this doc unless stated: the cloud container, 4 vCPU Intel Xeon @ 2.1 GHz, 16 GB, Godot
-4.6-stable (`/tmp/claude-0/g46/`, not on PATH), no GPU (GL on a software rasteriser under xvfb). Physics engine: **Rapier2D** (GDExtension,
-`project.godot` `[physics] 2d/physics_engine`), `physics_interpolation=true`, renderer `gl_compatibility`. Cloud numbers are relative evidence;
+4.6-stable (`/tmp/claude-0/g46/`, not on PATH), no GPU (GL on a software rasteriser under xvfb). Physics engine: **GodotPhysics2D** (`project.godot`
+names `Rapier2D`, but that GDExtension is not in the repo, so Godot falls back to its own server: s1.0), `physics_interpolation=true`, renderer
+`gl_compatibility`. Cloud numbers are relative evidence;
 absolute 60 fps on the target needs section 9.
 
 ## 1. Bottleneck ranking (DONE)
@@ -150,3 +151,30 @@ The AUDIT lines this section rests on (two runs per course, 2026-10-18, commit `
 segments 1-1 (us/world-frame): Player subtree 190, StateMachine 122, Enemies 67-79, Collision polygon 27, IncomingSpawner 27, LevelBG 21, PipeArea 12
 segments 1-2: Player subtree 268, StateMachine 143, Enemies 114, Collision polygon 61, Tiles 55, IncomingSpawner 36, LevelBG 26, PipeArea 19, WarpZone 16
 ```
+
+## 2. Threading verdict (DONE)
+
+### 2.1 Measured (`tests/tools/battle_bot_thread_spike.gd`, 8 worlds on 1-1, 5 s, same seed)
+
+| Run | Frame | Engine errors in 5 s | Games |
+|---|---|---|---|
+| main thread (as built) | 7.81 ms | 0 (start-up noise only) | reference traces |
+| each `BattleBotWorld` in its own processing thread group (`process_thread_group = SUB_THREAD`: its subtree's callbacks on the WorkerThreadPool) | **14.20 ms** (slower) | **~39 000**: 7 200 x `Condition "!Thread::is_main_thread()" ... Returning: nullptr` + `Parameter "dss" is null` (the physics direct space state - every RayCast2D / ShapeCast / intersect query - is main-thread only); thousands of `set_visible()` / `hide()` / `set_position()` / `BotViewport.set_canvas_transform()` "can only be accessed from the main thread" (CanvasItem visibility, the camera); 2 400 more main-thread guards returning false | **all 8 differ** from the main-thread run (raycasts fail, so feet, ice, step walls and ledges are wrong); two worlds produced the same trace (broken) |
+| main thread, `physics/2d/run_on_separate_thread=true` (via a temporary `override.cfg`) | 34 worlds: 34.5 ms vs 35.9 ms without (-4 %, within run-to-run noise) | 16 x `Parameter "body->get_space()" is null` | 1 of 8 worlds plays differently |
+
+### 2.2 Answers
+
+| Question | Answer |
+|---|---|
+| What can run off the main thread today | Pure computation over data the main thread snapshotted: the brain's plan search (`BattleBotController._sim` over the immutable `BattleBotCourseMap` and a copy of Mario's / the foes' numbers); building a course's `BattleBotCourseMap`; **loading** a level `PackedScene` (`ResourceLoader.load_threaded_request`) and **instantiating** it as a detached node tree (allowed: a tree not in the SceneTree belongs to no thread group). Nothing that touches a node in the tree |
+| What cannot | Any gameplay node's callbacks: they set visibility, positions, the camera's canvas transform, and query the physics space; Godot 4.6 guards all of those to the main thread (measured above). `add_child` into the live tree, `queue_free`, signals to main-thread objects (`BattleSession`, `Global`, the director) |
+| SceneTree operations | Not safe from worker threads except inside a node's own sub-thread group, and the gameplay code calls across groups everywhere (`Global`, `BattleSession`, `GameWorld` statics, `AudioManager` guards). Detached trees are fine |
+| Physics queries / body movement | `move_and_slide` did not raise in the spike, but the direct space state (every raycast) is main-thread only, so a world cannot play off the main thread. The separate physics thread gives no measurable gain here and perturbs results (above) |
+| SubViewport / render work | Canvas item state is main-thread guarded; the supported parallelism is the engine's own render thread (`rendering/driver/threads/thread_model`), which overlaps the RenderingServer's work with the next frame's simulation without touching gameplay. Worth measuring on the target (s9), not in this container (software GL) |
+| Full bot-world simulation on worker threads | **Not realistic in Godot 4.6.** It fails on the engine's own guards before any question of our shared state; making it work means deferring every visual change and every physics query in ~120 gameplay scripts. **Rejected.** |
+| Only the AI planning layer | Feasible and safe (pure computation on a snapshot; join inside the same frame so it stays deterministic), but small: planning is 1.5-3.3 ms for 34 worlds on this CPU, and cadence / plan reuse cuts most of it without threads. **Later, only if s9 says the brain matters on the Mac** |
+| Another parallelization | (1) **threaded level loading** + detached instancing (s4): removes load hitches, safe; (2) **the render thread** (thread_model = separate) for the 34 pane renders: a project setting, measure on the Mac; (3) separate physics thread: measured, rejected; (4) one OS process per group of bots: rejected (34 x the engine, IPC for panes and attacks, the opposite of doc 56's single-process decision) |
+
+**Verdict.** Do not thread the worlds. Keep every world's simulation on the main thread and make it cheaper (s1.4, items 1-4). The only thread
+work worth planning: loading on a worker (now), the engine's render thread (measure), and brain planning on the pool (only if needed). If the
+project ever wants simulation parallelism, it needs the rules state separated from Godot nodes first (s6), and that is not on the critical path.
