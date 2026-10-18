@@ -230,6 +230,9 @@ in `BattleSendStyle` rest on doc 52/54 measurements; doc 53 s5 lists what is sti
 **Do not redo.** The flag-parse diagnosis and the ownership enforcement; the send-ghost unification; the 1-1 -> 1-2 transition proof; the video
 measurements already in docs 52/54/55.
 
-**Next: doc 58.** The 34-opponent performance / architecture audit (bottlenecks, threading, rendering, loading, the stop/go decision and the
-ordered plan for Hermes) is `docs/58-battle-34-real-opponents-performance-audit.md`, written in checkpoints; its checkpoint table says which
-sections are complete. Read it before any R2 performance work.
+**Next: doc 58 (complete).** The 34-opponent performance / architecture audit is `docs/58-battle-34-real-opponents-performance-audit.md`:
+measured bottlenecks (on brick courses the cost is level decoration `_process`, our screen emulation and KO'd worlds that keep processing - not
+the rules), threading verdict (no worker-thread worlds: Godot 4.6's main-thread guards), rendering (30 Hz staggered panes), loading (block scene
+tiles are built on a level's first frame), memory, the decision (**GO: optimize the current architecture**), the ordered R2 plan (s7), and the
+exact Plex Mac benchmark (s9). Doc 58 s10 is its handoff; start there for R2. Physics in this repo is GodotPhysics2D (the Rapier2D setting has no
+extension behind it).

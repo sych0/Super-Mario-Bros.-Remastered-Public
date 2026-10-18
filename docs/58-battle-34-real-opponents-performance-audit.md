@@ -1,7 +1,6 @@
 # 58 — 34 real opponents: performance and architecture audit (handoff to local Hermes)
 
-Status: **audit in progress, written in checkpoints.** Each section below is either DONE (its conclusions are final for this pass) or
-PENDING (not reached yet: the cloud session may have ended before it). On top of `5815f87` (doc 57 s11 handoff). No gameplay code is changed
+Status: **audit complete** (all ten sections DONE; written in checkpoints, each committed and pushed as it was finished). On top of `5815f87` (doc 57 s11 handoff). No gameplay code is changed
 by this pass; any measurement instrumentation lives under `tests/tools/` only.
 
 Scope (from Zack): the cheapest technically sound path from a few correct real bot worlds (doc 56/57) to all 34 simultaneous real opponents at
@@ -20,7 +19,7 @@ acceptable performance, **without** reverting to a fake simulation. Not in scope
 | 7 | Ordered implementation plan for Hermes | DONE |
 | 8 | Cheap benchmark / spike tasks | DONE |
 | 9 | Target-machine (Plex Mac) benchmark | DONE (to be run by Hermes) |
-| 10 | Handoff state | PENDING |
+| 10 | Handoff state | DONE |
 
 Measurement environment for every number in this doc unless stated: the cloud container, 4 vCPU Intel Xeon @ 2.1 GHz, 16 GB, Godot
 4.6-stable (`/tmp/claude-0/g46/`, not on PATH), no GPU (GL on a software rasteriser under xvfb). Physics engine: **GodotPhysics2D** (`project.godot`
@@ -483,3 +482,56 @@ How to read it:
 * **E** is the acceptance view of A9/A10: `phase=PLAYING p95` <= 16.7 ms and `over33.3` near 0 with 34 real opponents.
 
 Taken twice (before step 1, and after step 8) it measures what R2 bought on the machine that matters.
+
+## 10. Handoff state (DONE; kept current - newest facts at the end of each list)
+
+### 10.1 The 14 audited costs, classified
+
+| Cost (brief) | Measured (this CPU, per world-frame unless stated) | Class | Plan step |
+|---|---|---|---|
+| 1. `Player.gd` hot path | 50-69 us own script; `physics_params` 1.1-2.4 us x ~30 | medium-risk optimization (shared with the real player) | 10 |
+| 2. player state machine | 122-143 us (`Normal`: movement + `move_and_slide`) | should not be touched (the rules); memoisation in 10 helps it | 10 |
+| 3. per-world physics processing | server step 162-196 us; post 45-100 us | should not be touched (it is the physics) | - |
+| 4. enemy / node counts | enemies 67-114 us; nodes 1 293 (1-1) / 7 214 (1-2), 16 per block | low-risk (lean blocks, KO release) / leave enemies | 2, 9 |
+| 5. SceneTree overhead | 0.12 us per GDScript callback; ~900 decoration callbacks per 1-2 world = the cost | low-risk local optimization | 1 |
+| 6. SubViewport cost | ~10 draw calls per pane; software GL 1.4-1.9 ms per pane; Mac TBD | can reduce render frequency | 4 |
+| 7. rendering cadence | linear in panes per frame | can reduce render frequency (30 Hz staggered) | 4 |
+| 8. pane compositing | the cell's crop of the world texture: not separable, small | leave (no compositor) | - |
+| 9. world creation | 1-1 warm ~45 ms + first frame 32-50 ms; 34 in one frame today | can be amortized / staggered; cache warming | 6 |
+| 10. course-transition hitch | 0.35-0.5 s single frame (block scene tiles built on the first frame) | amortize + cheaper blocks; staging if needed | 7, 9, 11 |
+| 11. theme / resource setter cost | inside creation: ~0.1 ms per setter warm, cold much more; `randomize()` per resolve | low-risk cache / fast path | 6, 9 |
+| 12. duplicated mutable resources | none found per frame (Mario's shapes are local-to-scene by design); per-world memory is nodes | leave; keep new copies content-keyed | - |
+| 13. shareable immutable resources | already shared (scenes, textures, SpriteFrames, TileSet copies per texture set, setter caches per skin state, course maps) | cache/share (done); warm early | 6 |
+| 14. bot brain / planner | 100-170 us (planning 44-97 us; 880-920 us per plan) | can be amortized; threading possible but unnecessary | 8, 12 |
+
+### 10.2 Refactors explicitly deferred
+
+* Simulation / presentation split of the gameplay (s6.2): not needed; reopened only by s6.4's criterion.
+* Host-neutral `Player.gd` rules (s6.3): at most the narrow motion-integration boundary, and only after s6.4 says so.
+* Worker-thread worlds (s2): rejected on Godot 4.6's own guards.
+* Shared pane compositor (s3): rejected.
+* Rapier / physics engine change: out of scope; first find out whether the Mac even has it (K2).
+
+### 10.3 State of the repository
+
+* **Branch** `claude/youthful-tesla-99o9hl`. Code HEAD unchanged since `b397b28` (doc 57): **this pass changed no game code.** Its commits are
+  documentation and measurement tools only: `840b5d1` (skeleton), `84e4afe` (s1 + `battle_bot_cost_audit.gd`), `6b78824` (s2 +
+  `battle_bot_thread_spike.gd`), `bdec3c5` (s3), `51dccd5` (s4 + `battle_bot_load_probe.gd`), `595771e` (s5, s6), `050adf5` (s7, s1.7 spike),
+  `555ed25` (s8, s9 + `battle_bot_screen_frametime.gd`), and the commit adding this section. All pushed to `origin`.
+* **New tools** (all under `tests/tools/`, measurement only): `battle_bot_cost_audit.gd` (probe breakdown, census, micro, memory, render,
+  `spike=decor`, `interp=0`), `battle_bot_thread_spike.gd`, `battle_bot_load_probe.gd`, `battle_bot_screen_frametime.gd`.
+* No temporary instrumentation left in game code; no `override.cfg` left behind (it was created and deleted for the s2 run).
+* Doc 57 s11 remains the Battle status document and points here.
+
+### 10.4 Next action for Hermes
+
+1. Run s9 (A-E) on the Plex Mac **before changing anything**, and record the results in a "Mac results" subsection here.
+2. Implement s7 step 1 (decoration `_process`), measure with `battle_bot_cost_audit.gd course=1` (expect s1.7's numbers), run the Battle
+   suites, commit. Then steps 2-8 in order, one commit each, measuring each.
+3. Re-run s9 after step 8 and apply s6.4.
+4. Outstanding from doc 57, unchanged: Zack's physical confirmation of doc 57's two fixes (1-1 -> 1-2 real worlds; the real player's send
+   ghost).
+
+### 10.5 Mac results
+
+(empty: to be filled by the s9 run)
