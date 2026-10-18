@@ -18,8 +18,8 @@ acceptable performance, **without** reverting to a fake simulation. Not in scope
 | 5 | Memory strategy | DONE |
 | 6 | Architecture decision (stop/go) | DONE |
 | 7 | Ordered implementation plan for Hermes | DONE |
-| 8 | Cheap benchmark / spike tasks | PENDING |
-| 9 | Target-machine (Plex Mac) benchmark | PENDING |
+| 8 | Cheap benchmark / spike tasks | DONE |
+| 9 | Target-machine (Plex Mac) benchmark | DONE (to be run by Hermes) |
 | 10 | Handoff state | PENDING |
 
 Measurement environment for every number in this doc unless stated: the cloud container, 4 vCPU Intel Xeon @ 2.1 GHz, 16 GB, Godot
@@ -415,3 +415,71 @@ the gate for the real game only in a separate step with its own before/after tes
 
 After steps 1-8 re-run s9 on the Mac and apply the stop/go criterion of s6.4. Steps 9-12 are ordered by expected gain per risk and are taken
 only as needed. Do not start R3 (all 34 real by default) before steps 1-6 and a Mac run that holds 60 fps at round start with 34 real.
+
+## 8. Cheap benchmarks / spikes that reduce the remaining uncertainty (DONE)
+
+Already run in this pass (keep as regression measurements): the probe breakdown (s1), the decoration spike (s1.7), the thread spike (s2), the
+separate-physics-thread run (s2), the render cadence and interpolation runs (s3), the load probe (s4), the memory runs (s5).
+
+Still open, cheapest first; each is a few lines in an existing tool or one test:
+
+| # | Spike | Settles | How |
+|---|---|---|---|
+| K1 | **The Mac run** (s9) | every absolute number; the cloud->Mac factor; whether rendering or simulation dominates there | s9 |
+| K2 | Is a Rapier addon installed on the Mac build? | whether s1's physics numbers apply | first line of any s9 tool: `rapier=` / `rapier_class=`. If true there, also run with it removed (determinism and cost differ) |
+| K3 | Screen-emulation index equivalence | step 3 is exact | in `battle_bot_screen_test`: run old and new `_update_screen` side by side, compare (notifier, on/off, tick) sequences |
+| K4 | What the remaining ~340 us/world of "other idle" on 1-2 is, after step 1 | whether area/body query callbacks or transform notifications need work | re-run `battle_bot_cost_audit.gd course=1` after step 1; if still large, bracket `physics_frame` vs the previous frame's end |
+| K5 | Freeing a 7 000-node level in one frame vs in slices | steps 2 and 7 sizes | load probe: time `level.free()` of a 1-2 level |
+| K6 | Lean block scene parity | step 9 is safe | build the derived scene, play bump / break / item blocks / P-switch in a bot world, compare with the full scene |
+| K7 | Render thread (`--render-thread separate`) on the Mac | whether pane rendering can overlap simulation for free | s9 C with and without |
+| K8 | `pane_every` 2 vs 3 visually, on the Mac | the cadence | look at the panes during a run; the reference updates every frame, so prefer the lowest cadence that holds 60 fps |
+| K9 | Brain plan reuse rate | whether step 12 is worth it | count plans whose chosen take-off equals the previous plan's (the controller already counts plans) |
+| K10 | A guard against O(N²) group scans | the latent `GameWorld.group` hazard (s1.3) | a test that fails if `GameWorld.group` / `call_group` is called more than K times per frame with 8 worlds |
+
+## 9. Target-machine benchmark (Zack's Plex Mac) - exact procedure (DONE: to be run by Hermes)
+
+Run from the repository root on the Mac, on the branch, with Godot 4.6 (the same major/minor as this audit). Close other heavy apps; plug in
+power. Record everything printed (the AUDIT / BOTBENCH / LOAD / FRAMETIME / THREADSPIKE lines) into s10 of this doc under "Mac results", plus
+the machine (`sysctl -n machdep.cpu.brand_string`, `sysctl -n hw.memsize`, macOS version) and the commit.
+
+```
+GODOT=/Applications/Godot.app/Contents/MacOS/Godot      # adjust to the local Godot 4.6
+$GODOT --headless --path . --import                      # once, builds .godot/ if needed
+
+# A. CPU only: per-world breakdown, 34 worlds (headless; the engine facts are its first line)
+$GODOT --headless --fixed-fps 60 --path . -s tests/tools/battle_bot_cost_audit.gd -- n=34 course=0 warm=2 window=480
+$GODOT --headless --fixed-fps 60 --path . -s tests/tools/battle_bot_cost_audit.gd -- n=34 course=1 warm=2 window=300
+$GODOT --headless --fixed-fps 60 --path . -s tests/tools/battle_bot_cost_audit.gd -- n=34 course=1 warm=2 window=300 spike=decor
+
+# B. scaling (frame_ms is the wall time per frame; ignore phys_ms / proc_ms, they are per-second maxima, s1.0)
+$GODOT --headless --fixed-fps 60 --path . -s tests/tools/battle_bot_bench.gd -- n=1,8,17,34 seconds=20
+
+# C. pane rendering on the real GPU (windowed, vsync off)
+$GODOT --disable-vsync --fixed-fps 60 --path . -s tests/tools/battle_bot_cost_audit.gd -- n=34 course=0 window=300 render=1 every=1
+$GODOT --disable-vsync --fixed-fps 60 --path . -s tests/tools/battle_bot_cost_audit.gd -- n=34 course=0 window=300 render=1 every=2
+$GODOT --disable-vsync --fixed-fps 60 --path . -s tests/tools/battle_bot_cost_audit.gd -- n=34 course=1 window=200 render=1 every=1
+$GODOT --disable-vsync --fixed-fps 60 --path . --render-thread separate -s tests/tools/battle_bot_cost_audit.gd -- n=34 course=0 window=300 render=1 every=1
+
+# D. loads and the cut
+$GODOT --headless --fixed-fps 60 --path . -s tests/tools/battle_bot_load_probe.gd -- others=33
+
+# E. the whole Battle screen as a player sees it (title -> Battle; 30 s of play), baseline then real opponents
+$GODOT --disable-vsync --fixed-fps 60 --path . -s tests/tools/battle_bot_screen_frametime.gd -- --battle-real-bots=0 seconds=30
+$GODOT --disable-vsync --fixed-fps 60 --path . -s tests/tools/battle_bot_screen_frametime.gd -- --battle-real-bots=8 seconds=30
+$GODOT --disable-vsync --fixed-fps 60 --path . -s tests/tools/battle_bot_screen_frametime.gd -- --battle-real-bots=34 seconds=30
+```
+
+How to read it:
+
+* **Cloud -> Mac factor** = this doc's BOTBENCH `n=34 frame_ms` (34.5-36.8 ms, s2 / doc 56) divided by the Mac's. Multiply every cloud number
+  in s1-s5 by 1/factor to project.
+* **Simulation budget** (A, B): 34 worlds on 1-1 headless `frame_ms` <= ~10 ms leaves room for the screen and panes at 60 fps; > 16 ms means
+  steps 1-8 are required before R3 (they are planned anyway); after them, apply s6.4's stop/go criterion (> 12 ms simulation on the worst
+  early course with rules > half of it).
+* **Rendering** (C): `draw_ms` with every=1 vs every=2 vs the separate render thread; pane cost per pane = (draw_ms(every=1) - draw_ms of
+  the empty main window) / 34. If 34 panes at every=2 cost < ~3 ms, rendering is not the problem.
+* **Loads** (D, E): the first frame of 1-2 and the cut frames; target after step 6/7/9: no frame above ~50 ms at a cut; round start spread
+  over PRE_ROUND with no frame above ~100 ms.
+* **E** is the acceptance view of A9/A10: `phase=PLAYING p95` <= 16.7 ms and `over33.3` near 0 with 34 real opponents.
+
+Taken twice (before step 1, and after step 8) it measures what R2 bought on the machine that matters.
