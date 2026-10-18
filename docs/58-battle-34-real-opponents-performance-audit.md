@@ -17,7 +17,7 @@ acceptable performance, **without** reverting to a fake simulation. Not in scope
 | 4 | Load / preload / hitch strategy | DONE |
 | 5 | Memory strategy | DONE |
 | 6 | Architecture decision (stop/go) | DONE |
-| 7 | Ordered implementation plan for Hermes | PENDING |
+| 7 | Ordered implementation plan for Hermes | DONE |
 | 8 | Cheap benchmark / spike tasks | PENDING |
 | 9 | Target-machine (Plex Mac) benchmark | PENDING |
 | 10 | Handoff state | PENDING |
@@ -151,6 +151,22 @@ The AUDIT lines this section rests on (two runs per course, 2026-10-18, commit `
 segments 1-1 (us/world-frame): Player subtree 190, StateMachine 122, Enemies 67-79, Collision polygon 27, IncomingSpawner 27, LevelBG 21, PipeArea 12
 segments 1-2: Player subtree 268, StateMachine 143, Enemies 114, Collision polygon 61, Tiles 55, IncomingSpawner 36, LevelBG 26, PipeArea 19, WarpZone 16
 ```
+
+### 1.7 Spike: item 1 measured, not estimated
+
+`battle_bot_cost_audit.gd ... course=1 spike=decor` switches off, in every bot world, the `_process` of each `SignalExposer` once its
+first-frame setup is done (`no_moving == true`, not editing) and of each `BetterAnimatedSprite2D` whose `do_offset` is false (bricks set
+`do_offset = false`, so their `_process` does nothing but cost the call). 870 callbacks per world on 1-2. No game code changed.
+
+| 34 worlds on 1-2 | Before | With the spike |
+|---|---|---|
+| frame | 124.2-124.7 ms | **76.6 ms** (-38 %) |
+| `_process` callbacks | 42-45 ms | 10.4 ms |
+| idle total | 60-61 ms | 20.5 ms |
+| physics nodes | 53.5-54.4 ms | 47.6 ms (less transform traffic) |
+| all 34 frozen (KO'd) | 75.9 ms | 36.7 ms (459 nodes per world still process: item 3 is still needed) |
+
+The remaining physics-node time is mostly the screen emulation (bot world's own step 0.89 ms per world): item 2 is next in size.
 
 ## 2. Threading verdict (DONE)
 
@@ -373,3 +389,29 @@ frame. Enemies stay as they are (they are 7-10 % of a world). Everything else (b
   **simulation alone > 12 ms for 34 alive worlds** on the worst early course, *and* the audit's breakdown shows the rules (state machine +
   `Player.gd` + enemies) are more than half of it. Then do 6.3's narrow motion boundary first, not a full split.
 * Threads stay off the worlds (s2).
+
+## 7. Ordered implementation plan for Hermes / Sonnet (DONE)
+
+Rules for every step: one step per commit; behaviour-identical unless the step says otherwise; measure before and after with
+`battle_bot_cost_audit.gd` (34 worlds, `course=0` and `course=1`) and record the AUDIT lines in this doc (s10); run the Battle suites of doc 57
+s8 (`battle_bot_world_test`, `battle_bot_screen_test`, `battle_bot_transition_test`, `battle_send_ghost_game_test`, `battle_bot_render_test`,
+and the other headless / GL suites). Gate any change to a script the real player's game also runs behind `GameWorld.is_bot(self)` first; lift
+the gate for the real game only in a separate step with its own before/after test. Default build stays 0 real opponents until R3.
+
+| Step | What | Where | Risk | Expected gain (this CPU, 34 worlds) | Proof required |
+|---|---|---|---|---|---|
+| 1 | **Decoration `_process` off in bot worlds**: `SignalExposer` stops processing after its first-frame setup when it has no `TrackRider` connection and is not editing; `BetterAnimatedSprite2D` processes only when `do_offset` is true (`set_process(do_offset)` in `_ready`) | `SignalExposer.gd`, `BetterAnimatedSprite.gd` (gate: `GameWorld.is_bot` for SignalExposer; the sprite change is identical for every world) | low | **1-2: -47 ms (measured, s1.7)**; 1-1: ~-4 ms | determinism traces unchanged (`battle_bot_world_test`); pixels of `battle_bot_render_test` unchanged |
+| 2 | **KO'd world releases its level**: at OUT, render the pane once more, remove the level from the viewport, free it in slices over the next frames; the cell keeps the last picture (viewport no longer updated) | `BattleBotWorld._go_out`, `BattleBotDirector` | low | frozen worlds -> ~0 (today up to 2.2 ms each on 1-2); memory -6 to -28 MB per KO | KO card still over the last picture (render test); no node of the old level left after N frames; session unaffected |
+| 3 | **Screen emulation with a spatial index**: notifiers bucketed by x (e.g. 64 px columns) at adoption; per tick check only buckets overlapping the camera rect +/- 1 bucket, every notifier currently on, and every notifier under a moving body (CharacterBody2D / RigidBody2D ancestor, re-bucketed when its rect changes); a full sweep every N ticks in debug builds asserting nothing was missed | `BattleBotWorld._adopt_notifier`, `_update_screen` | low (our code) | 1-2: ~-28 ms; 1-1: ~-0.6 ms | **side-by-side equivalence test**: old and new algorithm on the same worlds, identical (notifier, on/off, tick) sequences for 60 s x 8 worlds x 3 seeds on 1-1 and 1-2 |
+| 4 | **Pane render cadence**: director renders each live world every 2nd frame, staggered by id; once on OUT; once while frozen; `pane_every` field (1/2/3) | `BattleBotDirector._process` | low | pane rendering halves (s3: 52 -> 31 ms here) | simulation traces identical with render on/off/every=2; render test updated to wait 2 frames |
+| 5 | **Bot worlds opt out of physics interpolation** (`physics_interpolation_mode = OFF` on `BattleBotWorld`) | `BattleBotWorld._init` | low | ~-3 % of a rendered frame | traces identical (interpolation is presentation only); render test |
+| 6 | **Round-start creation spread + cache warming** (s4 items 1, 2): warm `PackedScene`s and themed resources at menu / LOADING (worker + polling, never a blocking wait); create worlds with a per-frame time budget from LOADING into PRE_ROUND; assert all exist and are first-framed before PLAYING | `BattleBotDirector.start`, `BattleScreen._ensure_driver`, `BattleBotWorld.packed_scene` | low | removes the ~2.5 s single-frame stall at round start | round-start frame-time trace (no frame > budget + one world's creation); transition / ownership tests unchanged |
+| 7 | **Free old level in slices at the cut** (s4 item 5) | `BattleBotWorld._swap_scene` | low | removes the free part of the cut (measure) | transition test (old level gone after N frames, new one identical) |
+| 8 | **Small Battle-side per-frame items**: `BattleIncomingSpawner` early-out when its target has no incoming / spawned rows; `LevelBGNew` in bot worlds repositions only on frames the pane renders (presentation); brain: cache `_foe_nodes()` once per tick (called several times a tick today) | `BattleIncomingSpawner`, `LevelBGNew` (gated), `BattleBotController` | low | ~-2 ms (1-1), more on 1-2 | traces identical (brain: same buttons tick for tick) |
+| 9 | **Block creation cheaper** (s4 item 3): `ResourceSetterNew` fast path for a cached (json, skin state); lean derived block scenes in the bot `TileSet` copies (strip `SignalExposer`+`LineDrawer`, `EditorPropertyExposer`, `TrackJoint`) | `ResourceSetterNew.gd`, `BattleBotWorld.tileset_with` + a start-up builder | medium | first frame of 1-2 230 -> ~100 ms (estimate); -25 % nodes and memory on brick courses | block parity test in a bot world (bump, break, coin, item and 1-up blocks, P-switch); render test pixels; load probe before/after |
+| 10 | **Mario's hot path, behaviour-identical** (doc 56 s18 item 2): memoise `physics_params` per (type, dict, key, power state, mults) with invalidation on power-state / character / theme change; `ScalableCollisionPolygon` rebuild only when its inputs change; `handle_invincible_palette` sets shader params only on change; `handle_step_collision` writes `disabled` only on change. Gated to bot worlds first | `Player.gd`, `ScalableCollisionPolygon.gd` | **medium** (the real player's code) | Mario -30 to -40 %: ~-3 ms (1-1) | identical traces (bot) over 3 seeds x 60 s; then, ungated, the real player's movement trace from a scripted input file identical before/after |
+| 11 | **Stage the next course during the clear** (s4 item 4), only if the Mac still shows a visible hitch at the cut after 6, 7, 9 | `BattleBotWorld`, `GameWorld.bot_of`, `BattlePreviewCell` | medium | the cut frame back under budget | transition test rewritten for viewport swap; ownership checks |
+| 12 | **Brain planning cadence / reuse**, only if s9 shows the brain matters on the Mac: reuse the last plan while its first frames still match; plan every 6 frames instead of 3 when nothing changed; optional WorkerThreadPool for `_sim` with an in-frame join | `BattleBotController` | low-medium (behaviour changes slightly: decisions are the brain's, not the game's) | brain -50 % | A8 metrics unchanged within noise |
+
+After steps 1-8 re-run s9 on the Mac and apply the stop/go criterion of s6.4. Steps 9-12 are ordered by expected gain per risk and are taken
+only as needed. Do not start R3 (all 34 real by default) before steps 1-6 and a Mac run that holds 60 fps at round start with 34 real.

@@ -16,6 +16,8 @@ var seed_value := 7
 var render := false
 var every := 1 ## render each world every `every` frames (staggered), with render=1
 var probe_script: GDScript = null
+var spike_decor := false ## spike=decor: switch off the per-frame _process of SignalExposer (after its first-frame setup) and of
+	## BetterAnimatedSprite2D with do_offset = false, in every bot world (what s1 item 1 would do), to measure the gain
 var interp := true ## interp=0: bot worlds opt out of physics interpolation (a presentation setting; measures its cost)
 
 func _initialize() -> void:
@@ -36,6 +38,8 @@ func _initialize() -> void:
 			every = int(a.substr(6))
 		elif a == "interp=0":
 			interp = false
+		elif a == "spike=decor":
+			spike_decor = true
 	probe_script = GDScript.new()
 	probe_script.source_code = "extends Node\nvar t := 0\nfunc _physics_process(_d):\n\tt = Time.get_ticks_usec()\n"
 	probe_script.reload()
@@ -68,6 +72,25 @@ func _run() -> void:
 		await process_frame
 		if f % 60 == 59:
 			session.step()
+	if spike_decor:
+		var off := 0
+		for w in worlds:
+			var stack: Array[Node] = [w.level]
+			while not stack.is_empty():
+				var nd: Node = stack.pop_back()
+				for c in nd.get_children():
+					stack.append(c)
+				var sc: Script = nd.get_script()
+				if sc == null:
+					continue
+				var f := sc.resource_path.get_file()
+				if f == "SignalExposer.gd" and nd.get("no_moving") == true and not nd.get("editing"):
+					nd.set_process(false)
+					off += 1
+				elif f == "BetterAnimatedSprite.gd" and not nd.get("do_offset"):
+					nd.set_process(false)
+					off += 1
+		print("AUDIT spike decor: switched off %d per-frame _process callbacks (%.0f per world)" % [off, off / float(worlds.size())])
 	print("AUDIT memory course=%d n=%d static_MB=%.1f (%.2f per world, the first world's shared resources included)" % [course, n_worlds,
 		(Performance.get_monitor(Performance.MEMORY_STATIC) - mem0) / 1048576.0, (Performance.get_monitor(Performance.MEMORY_STATIC) - mem0) / 1048576.0 / n_worlds])
 	_census(worlds)
