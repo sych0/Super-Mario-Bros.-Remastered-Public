@@ -176,3 +176,56 @@ seeded traits for variety.
 ## 10. Commit
 
 The commit that adds this document, on `claude/youthful-tesla-99o9hl` over `b4305e3`.
+
+## 11. HANDOFF STATE (read this first in a fresh session; kept current, newest facts at the end of each list)
+
+Written at a point where the cloud budget was nearly spent. Everything below was reconstructed from the repository (this doc, doc 56, `git log`),
+not from the chat. This is the Battle Mode status document: update **this section** (not a new file) as work continues, and re-point to a later
+doc if a numbered doc supersedes it.
+
+**Branch / HEAD.** `claude/youthful-tesla-99o9hl`; code HEAD `b397b28` (doc 57's fix commit), pushed to `origin`. The commit that adds this section
+sits directly on top (`git log -2`). **Working tree was clean: no uncommitted work, no temporary instrumentation, nothing to inherit.**
+
+**Done (do not redo).** Docs 35-57: battle architecture, session, attack system, incoming enemies, targeting, UI fidelity, send presentation
+measured against the public SMB35 video (`reference-video/reference.mp4` on the local machine, never committed), send ghosts (doc 55), real
+opponent worlds (`BattleBotWorld`, `BattleBotController`, `BattleBotDirector`; doc 56 is the architecture decision, accepted), real opponents
+keep their real worlds into 1-2 and the real player's stomps draw the same send ghost (doc 57).
+
+**Architectural decisions already accepted.** (1) Opponents are real game instances (`BattleBotWorld`), one per opponent, own World2D/viewport, pane
+= that world's screen; the facsimile previews are legacy and are to be deleted at R3. (2) One shared brain, `BattleBotController`, varied by seeded
+`BattleBotTraits`. (3) Exclusive ownership per opponent: a world-driven id never touches `BattlePreviewDriver/Stages/Cell.set_live`; violations
+are `BattleBotDirector.violation`. (4) A send ghost is drawn in its sender's own window + the panes, for every sender (doc 57 s7, a deliberate
+departure from doc 55's measurement for the real player only). (5) Default build still has 0 real opponents.
+
+**Physical-test feedback from Zack (as recorded in the docs).** Doc 56: "the 34 opponents must actually be playing the game", not tracks or
+scripted walkers. Doc 57: after 1-1 the opponent panes showed a "winter" (3-2 stand-in) course; cause was `--battle-real-bots=4` given before
+`--` never being read, so every opponent was a legacy preview (fixed); and the real player's stomps showed no visible send ghost (fixed).
+**Zack has not yet re-tested these two fixes on the physical build, so confirmation is outstanding.**
+
+**Current blocker.** None in code. The open item is Zack's physical confirmation of doc 57's two fixes, run as
+`game --battle-real-bots=4` or `game -- --battle-real-bots=4` (or env `SMB1R_BATTLE_REAL_BOTS=4`); the startup log must print
+`Battle: opponents #1-4 play their real games (BattleBotWorld); #5-34 are legacy previews`. Container caveat: ROM-derived art is the stand-in
+pack (chroma green) here; judge art on the physical build.
+
+**Remaining work (doc 56 s13, unchanged).** A8 brain competence (bots clear 1-1 about as often as the reference but twice as fast, ~2x early
+KOs); A9 34 worlds at 60 fps; A10 course-load hitches (`battle_bot_bench`, doc 56 s17-18); R1 per-world seam for the remaining entity set + per-world
+RNG; R2 performance; R3 all 34 real by default and delete the preview pipeline; R4 brain on every course, power-ups, warp zones, coins. Also
+pending video measurements M1-M6 in doc 53 s5 (`tools/reference/measure_reference.py`).
+
+**Tests.** From the repo root, headless: `godot --headless --fixed-fps 60 --path . -s tests/<name>.gd` (each file's header gives its exact line;
+GL suites such as `battle_bot_render_test` run without `--headless`). Last results (doc 57 s8): `battle_bot_transition_test` 65/65,
+`battle_send_ghost_game_test` 32/32, `battle_bot_render_test` 23/23, `battle_send_ghost_test` 83/83, `battle_bot_world_test` 41/41,
+`battle_bot_screen_test` 18/18, other headless suites 1 796/1 796, other GL suites 200/200. Trace tool: `tests/tools/battle_bot_transition_trace.gd`.
+Godot was not on PATH in the cloud container I last checked; I did not re-run the suites in this handoff step.
+
+**Known regressions / uncertainties.** `battle_attack_screen_test` fails 1 of 131 on an unseeded round in roughly 1 run in 3 (pre-existing flake,
+doc 56 s19; pin `BattleHandler.seed_source`). A stomped Goomba emits `killed("Hello")`, a script error in `GibSpawner.summon_gib` (pre-existing,
+unfixed). On frame 30 a send ghost is still drawn under the burst's first frame (clock rounding, same for every sender). Reference-video values
+in `BattleSendStyle` rest on doc 52/54 measurements; doc 53 s5 lists what is still unmeasured.
+
+**Important paths.** `docs/56-*.md`, `docs/57-*.md` (this), `docs/53-*.md` (fidelity audit + video measurement plan); `Scripts/` Battle* classes
+(`BattleBotWorld`, `BattleBotDirector`, `BattleBotController`, `BattleScreen`, `BattleHandler`, `BattlePreview*`, `BattleSendGhost*`, `BattleAttack*`);
+`tests/*.gd` and `tests/tools/`; `tools/reference/` (video tools); `/home/user/reference-video/reference.mp4` (local only).
+
+**Do not redo.** The flag-parse diagnosis and the ownership enforcement; the send-ghost unification; the 1-1 -> 1-2 transition proof; the video
+measurements already in docs 52/54/55.
