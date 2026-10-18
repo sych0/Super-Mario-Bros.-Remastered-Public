@@ -229,3 +229,7 @@ in `BattleSendStyle` rest on doc 52/54 measurements; doc 53 s5 lists what is sti
 
 **Do not redo.** The flag-parse diagnosis and the ownership enforcement; the send-ghost unification; the 1-1 -> 1-2 transition proof; the video
 measurements already in docs 52/54/55.
+
+**Next: doc 58.** The 34-opponent performance / architecture audit (bottlenecks, threading, rendering, loading, the stop/go decision and the
+ordered plan for Hermes) is `docs/58-battle-34-real-opponents-performance-audit.md`, written in checkpoints; its checkpoint table says which
+sections are complete. Read it before any R2 performance work.
