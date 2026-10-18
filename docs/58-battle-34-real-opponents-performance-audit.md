@@ -14,7 +14,7 @@ acceptable performance, **without** reverting to a fake simulation. Not in scope
 | 1 | Bottleneck ranking, with measurements | DONE (simulation; rendering in s3) |
 | 2 | Threading verdict | DONE |
 | 3 | Rendering strategy | DONE |
-| 4 | Load / preload / hitch strategy | PENDING |
+| 4 | Load / preload / hitch strategy | DONE |
 | 5 | Memory strategy | PENDING |
 | 6 | Architecture decision (stop/go) | PENDING |
 | 7 | Ordered implementation plan for Hermes | PENDING |
@@ -225,3 +225,71 @@ of the rendered frame: real but small.
 
 Expected: pane rendering halves (on this machine 52 -> 31 ms for 34 panes; on the Mac, half of whatever s9 measures). Gameplay unchanged by
 construction (the world's simulation is identical with or without rendering: doc 56 s2, `battle_bot_world_test`'s determinism checks).
+
+## 4. Load, preload and transition hitches (DONE)
+
+### 4.1 Measured (`tests/tools/battle_bot_load_probe.gd`, headless, this CPU)
+
+One world created at a time with nothing else running (two runs; ranges):
+
+| Course | Nodes | Scene load | `instantiate()` | `add_child` (enter tree + `_ready`, incl. `ResourceSetterNew`) | **First frame** | 2nd / 3rd frame |
+|---|---|---|---|---|---|---|
+| 1-1 cold (first world of the process) | 1 291 | 145-196 ms | 20-24 ms | 142-204 ms | 62-84 ms | 4-6 / 2-3 ms |
+| 1-1 warm | 1 291 | 0 (cached) | 8-12 ms | 28-49 ms | **32-50 ms** | 2 / 1-2 ms |
+| 1-2 cold (its themed resources not resolved yet) | 7 212 | 31-47 ms | 10-14 ms | 167-188 ms | **512-523 ms** | 18 / 3 ms |
+| 1-2 warm | 7 212 | 0 | 11-17 ms | 39-63 ms | **191-271 ms** | 3-5 / 3 ms |
+
+**Where the first frame goes.** All of it is before the physics callbacks (1-2 warm: 247 ms "before physics nodes", 2.5 ms physics nodes, 0.8
+ms post). It is the `TileMapLayer`'s deferred internal update: SMB1's bricks, `?` blocks and coins are **scene tiles** of `Scenes/Parts/Tiles.tscn`
+(a `TileSetScenesCollectionSource`), so the level scene holds only cells, and the engine instantiates every block scene (16 nodes each: body,
+`BetterAnimatedSprite2D` + `ResourceSetterNew`, collision, `BlockAnimations`, `EditorPropertyExposer`, `PSwitcher`, `TrackJoint`,
+`LevelPersistance`, `VisibleOnScreenEnabler2D`, `SignalExposer` + its `LineDrawer`) and runs their `_enter_tree` / `_ready` on the level's
+first frame, on the main thread. ~0.55 ms per block on 1-2 warm. This is why `instantiate()` is cheap and the first frame is not.
+
+**A real cut while 33 other worlds play 1-1** (the bot's own `_finish_course`): the cut itself (free 1-1, instantiate 1-2, enter tree) 68-71 ms,
+then the next frame **275 ms** (1-2 cold for this process) and **439 ms** for the second world's cut. Base frame 31 ms. (This run also printed
+out-of-range errors from the probe's own contestant ids above 34, which inflate the base frame a little; the cut costs are the probe's own
+timestamps.) So a course change today is a **~0.35-0.5 s single-frame stall** on this CPU, dominated by block-scene instancing.
+
+**Threads.** `PackedScene.instantiate()` of 1-2 on a `WorkerThreadPool` task **deadlocks** if the main thread blocks in
+`wait_for_task_completion` (measured: hung at 0 % CPU); with the main thread polling `is_task_completed` each frame it completes (14.5 ms on
+the worker; main frames unaffected, 0.16 ms) and the detached level then enters the tree on the main thread in 55 ms. But that moves only
+the cheap part: the block scenes are made later, in the tree, by the `TileMapLayer`.
+
+**Round start today.** `BattleScreen._ensure_driver` creates all 34 worlds in one process frame (`bots.start(real)`): on this CPU about
+34 x (10 + 35-50) ms of creation plus 34 x 32-50 ms of first frames in the next frame (doc 56: 1.25 s + 1.26 s for 34). PRE_ROUND lasts 5.25 s
+with the game window frozen, so there is room to spread it.
+
+### 4.2 Recommendations (simplest safe first; none changes course progression: the cut still happens on the same tick, after the fade, into a
+fully built level)
+
+1. **Warm caches before the round** (low risk): at the Battle menu or LOADING, load the `PackedScene`s of 1-1 and 1-2 into
+   `BattleBotWorld._packed` (on a worker, polled - never a blocking wait), and resolve the themed resources of their themes once (create one
+   throwaway bot world per theme in a hidden viewport and free it after its first frame). Removes the cold penalty: 1-2's first frame
+   512 -> ~230 ms here, 1-1's first world 400 -> ~80 ms.
+2. **Spread round-start creation** (low risk): the director creates worlds over several frames with a time budget (e.g. stop for this
+   frame once 8 ms are spent; at least one world per frame), starting at LOADING and finishing inside PRE_ROUND; every world must exist and
+   have had its first frame before PLAYING (assert it). Worlds are frozen until PLAYING, so a partial set is harmless; nothing about a
+   world's game changes. On this CPU that is ~34 frames of ~75 ms during the countdown; on the Mac roughly a third (measure, s9). If the
+   countdown's frame drops are visible, start earlier (the LOADING / transition screen).
+3. **Make blocks cheaper to create** (medium risk, biggest lever on load *and* per-frame cost of brick courses):
+   * a `ResourceSetterNew` fast path when the resolved resource for (json path, skin state) is cached: skip `load(json)`, the pack walk and
+     `randomize()` (the latter also stops reseeding the global RNG on every resolve, doc 56 s11);
+   * **lean derived block scenes for bot worlds**: bot worlds already use their own themed `TileSet` copies (`BattleBotWorld.tileset_with`);
+     give those copies' scene collection sources a derived `PackedScene` per block built once at start-up from the real prefab with the
+     editor-only nodes removed (`SignalExposer` + `LineDrawer`, `EditorPropertyExposer`, `TrackJoint`; `LevelPersistance` already does
+     nothing in a bot world). Same block script, collision, animations and P-switch: the real block, minus the level editor. One source of truth
+     (the real `.tscn`), a list of stripped node names, and a parity test (bump, break, coin, P-switch, item blocks) in a bot world.
+   Expected: block creation 2-3x cheaper; with s1 item 1 the per-frame cost of bricks also drops.
+4. **Stage the next course during the clear** (medium risk; only if 1-3 leave the cut above budget on the Mac): from the flagpole touch to the
+   cut there are ~1.3-1.5 s (slide, 0.27 s hold, 6-frame fade). At the touch, instantiate the next level on a worker (polled); then add it,
+   `process_mode = DISABLED`, to a second `BattleBotViewport` the world owns (its own World2D, so it never meets the playing level), let its
+   first frame build the blocks there; at the cut, make that viewport the world's active one (enable it, point the cell at its texture, free
+   the old one). Needs: `GameWorld.bot_of` to treat the staging viewport as "not yet this world's game" (no enemy adoption, no notifier
+   adoption until promoted), and doc 57's transition assertions changed from "same viewport RID" to "the cell shows the world's active
+   viewport". The cost still lands in one frame, just earlier and off the cut; the real fix for the spike is item 3.
+5. **Free old levels in slices** (low risk): at the cut / KO, remove the old level from the tree at once (the game is over for it) and free its
+   subtrees over the next frames (e.g. one top-level child per frame), so a 7 000-node free never lands in one frame. A KO'd world's level is
+   freed the same way (s1 item 3); its pane keeps the last rendered picture (the viewport is not re-rendered).
+6. **Do not** build level node trees on worker threads beyond `instantiate()` (the in-tree block instancing cannot move), and never block the
+   main thread on a worker that touches resources (deadlock, measured).
