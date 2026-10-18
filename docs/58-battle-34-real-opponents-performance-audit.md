@@ -13,7 +13,7 @@ acceptable performance, **without** reverting to a fake simulation. Not in scope
 |---|---|---|
 | 1 | Bottleneck ranking, with measurements | DONE (simulation; rendering in s3) |
 | 2 | Threading verdict | DONE |
-| 3 | Rendering strategy | PENDING |
+| 3 | Rendering strategy | DONE |
 | 4 | Load / preload / hitch strategy | PENDING |
 | 5 | Memory strategy | PENDING |
 | 6 | Architecture decision (stop/go) | PENDING |
@@ -178,3 +178,50 @@ segments 1-2: Player subtree 268, StateMachine 143, Enemies 114, Collision polyg
 **Verdict.** Do not thread the worlds. Keep every world's simulation on the main thread and make it cheaper (s1.4, items 1-4). The only thread
 work worth planning: loading on a worker (now), the engine's render thread (measure), and brain planning on the pool (only if needed). If the
 project ever wants simulation parallelism, it needs the rules state separated from Godot nodes first (s6), and that is not on the critical path.
+
+## 3. Rendering strategy (DONE)
+
+### 3.1 Measured (GL compatibility renderer on Mesa's software rasteriser under xvfb; 34 worlds; `battle_bot_cost_audit.gd ... render=1`)
+
+Panes are rendered as `BattleBotDirector` does (`UPDATE_ONCE` on each world's `BattleBotViewport`); `every=2` renders half the worlds each
+frame (each pane at 30 Hz, alternating halves). `draw` = wall time from `RenderingServer.frame_pre_draw` to `frame_post_draw`.
+
+| Course | Panes | Frame | Draw | Draw calls per frame (per rendered pane) |
+|---|---|---|---|---|
+| 1-1 | not rendered | 47.3 ms | - | - |
+| 1-1 | every frame | 95.0 ms | 52.2 ms | 329 (**9.7**) |
+| 1-1 | every 2nd frame, staggered | 73.5 ms | 30.7 ms | 166 (9.8) |
+| 1-1 | every frame, bot worlds' `physics_interpolation_mode = OFF` | 92.2 ms | 50.2 ms | 329 |
+| 1-2 | not rendered | 128.5 ms | - | - |
+| 1-2 | every frame | 180.2 ms | 64.3 ms | 392 (11.5) |
+
+Reading: render cost is **linear in panes rendered per frame** (staggering by 2 halves it exactly), and a pane is only ~10 draw calls: the
+2D batcher already merges a world's tiles and sprites, so a shared compositor has nothing left to batch. On this machine a pane costs
+~1.4-1.9 ms, almost all of it the software rasteriser filling 256x240 (6x the canvas items on 1-2 add only 23 %: the canvas walk is ~0.1 us
+per item here). On a GPU the fill is negligible; what remains per pane is the CPU walk of the world's canvas items (681 on 1-1, 4 071 on
+1-2) plus ~10 draw calls: estimated 0.1-0.4 ms per pane on the Mac, **to be measured** (s9). Physics interpolation in bot worlds costs ~3 %
+of the rendered frame: real but small.
+
+### 3.2 The options
+
+| Option | Verdict | Why |
+|---|---|---|
+| 1. 34 SubViewports rendered every frame (today) | keep the mechanism, not the cadence | correct and simple; cost linear in panes |
+| 2. Simulation at 60 Hz, panes at 30 Hz | **yes** | simulation never depends on rendering (doc 56: notifiers are emulated, worlds never render themselves), so gameplay is identical at any pane rate; halves render cost |
+| 3. Staggered pane rendering across frames | **yes, with 2** | same total as 2 but an even load per frame (17 panes a frame instead of 34 every other frame) |
+| 4. Shared atlas / compositor (all worlds' canvases attached to one viewport) | **no** | no per-canvas clipping (each world's canvas would draw over its neighbours' cells), camera transforms to re-implement, and nothing to batch (10 draw calls a pane already) |
+| 5. Selective rendering of only the pane's visible content | **no gain worth it** | Godot already culls per canvas item; the 256x240 viewport must stay (the real camera and its limits use the viewport size); the crop is free on a GPU |
+| 6. Freeze rendering for KO'd / inactive worlds | **yes** (OUT already skipped); add: frozen pre-round = render once; a fading world keeps rendering | free |
+| 7. Others | `physics_interpolation_mode = OFF` on each `BattleBotWorld` (bots render at the physics rate; -3 %, low risk); the engine's render thread (`thread_model`) - measure on the Mac; adaptive cadence (2 -> 3 when the frame budget is exceeded) | |
+
+### 3.3 Recommendation
+
+1. `BattleBotDirector` renders each live world every **2nd** frame, staggered by contestant id (`(id + frame) % 2 == 0`); a world renders
+   once more on entering OUT (so the pane keeps the death's last picture) and once while frozen (pre-round), never again until it changes.
+2. Make the cadence a director field (`pane_every`, default 2) so the Mac benchmark can try 1, 2 and 3; consider adaptive 2->3 only if s9
+   shows the panes still cost too much.
+3. Bot worlds opt out of physics interpolation (`physics_interpolation_mode = OFF` on the `BattleBotWorld`).
+4. Do not build a compositor. Do not shrink the viewports.
+
+Expected: pane rendering halves (on this machine 52 -> 31 ms for 34 panes; on the Mac, half of whatever s9 measures). Gameplay unchanged by
+construction (the world's simulation is identical with or without rendering: doc 56 s2, `battle_bot_world_test`'s determinism checks).

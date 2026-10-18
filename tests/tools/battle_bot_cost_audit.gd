@@ -16,6 +16,7 @@ var seed_value := 7
 var render := false
 var every := 1 ## render each world every `every` frames (staggered), with render=1
 var probe_script: GDScript = null
+var interp := true ## interp=0: bot worlds opt out of physics interpolation (a presentation setting; measures its cost)
 
 func _initialize() -> void:
 	for a in OS.get_cmdline_user_args():
@@ -33,6 +34,8 @@ func _initialize() -> void:
 			render = true
 		elif a.begins_with("every="):
 			every = int(a.substr(6))
+		elif a == "interp=0":
+			interp = false
 	probe_script = GDScript.new()
 	probe_script.source_code = "extends Node\nvar t := 0\nfunc _physics_process(_d):\n\tt = Time.get_ticks_usec()\n"
 	probe_script.reload()
@@ -55,6 +58,8 @@ func _run() -> void:
 	for i in n_worlds:
 		session.set_world_driven(i + 1)
 		var w = W.new(i + 1, session, seed_value)
+		if not interp:
+			w.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		root.add_child(w)
 		w.start(course)
 		worlds.append(w)
@@ -442,7 +447,7 @@ func _probed(worlds: Array, session) -> void:
 	for w in worlds:
 		w.set_frozen(false)
 	if render:
-		print("AUDIT probed render every=%d draw_ms=%.2f (pre->post draw, CPU wall) draw_calls=%.0f" % [every, draw / 1000.0 / (fr - 1), draw_calls / (fr - 1)])
+		print("AUDIT probed render every=%d interp=%s draw_ms=%.2f (pre->post draw, CPU wall) draw_calls=%.0f (%.1f per rendered pane)" % [every, interp, draw / 1000.0 / (fr - 1), draw_calls / (fr - 1), draw_calls / (fr - 1) / (nw / every)])
 	var keys := seg.keys()
 	keys.sort_custom(func(a, b): return seg[a] > seg[b])
 	for k in keys:
